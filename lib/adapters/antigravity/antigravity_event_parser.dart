@@ -300,11 +300,15 @@ class AntigravityEventParser {
       TokenUsage usage = const TokenUsage();
       if (res['usage'] is Map) {
         final u = Map<String, dynamic>.from(res['usage'] as Map);
+        final inTok = (u['input_tokens'] as num?)?.toInt() ?? 0;
+        final cachedTok = (u['cache_read_tokens'] as num?)?.toInt() ?? 0;
         usage = TokenUsage(
-          inputTokens: (u['input_tokens'] as num?)?.toInt() ?? 0,
+          inputTokens: inTok,
           outputTokens: (u['output_tokens'] as num?)?.toInt() ?? 0,
           thinkingTokens: (u['thinking_tokens'] as num?)?.toInt() ?? 0,
-          cachedTokens: (u['cache_read_tokens'] as num?)?.toInt() ?? 0,
+          cachedTokens: cachedTok,
+          // ponytail: Gemini처럼 입력에 캐시가 포함된다고 가정합니다. 실제 캐시 적중 로그로 확인되면 조정합니다.
+          promptTokens: inTok > cachedTok ? inTok : cachedTok,
           totalTokens: (u['total_tokens'] as num?)?.toInt() ?? 0,
         );
       }

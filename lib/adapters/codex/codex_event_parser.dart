@@ -321,6 +321,7 @@ class CodexEventParser {
           outputTokens: outTok,
           thinkingTokens: reasonTok,
           cachedTokens: cachedTok,
+          promptTokens: inTok,
           totalTokens: inTok + outTok,
         );
       }

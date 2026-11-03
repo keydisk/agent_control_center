@@ -263,6 +263,7 @@ class NewSessionDialog extends StatefulWidget {
     this.title = '새 세션',
     this.note,
     this.showInstructions = false,
+    this.lockFolder = false,
     this.initialInstructions = '',
     this.previousSessions = const [],
   });
@@ -270,6 +271,9 @@ class NewSessionDialog extends StatefulWidget {
   final String title;
   final String? note;
   final bool showInstructions;
+
+  /// 그룹 세션은 작업 폴더가 그룹 폴더로 고정됩니다.
+  final bool lockFolder;
   final String initialInstructions;
   final List<SessionSnapshot> previousSessions;
   final BackendType initialBackend;
@@ -316,7 +320,8 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
       return;
     }
     try {
-      widget.trustedFolders?.add(folder);
+      // 그룹 폴더의 신뢰를 해제했다면 조용히 되살리지 않고 실행 때 다시 묻습니다.
+      if (!widget.lockFolder) widget.trustedFolders?.add(folder);
     } on StateError catch (e) {
       setState(() => _error = e.message);
       return;
@@ -369,12 +374,15 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             _FolderField(
               fieldKey: const ValueKey('new_session_folder'),
               controller: _folderCtrl,
+              enabled: !widget.lockFolder,
               errorText: _error,
             ),
-            if (widget.trustedFolders != null) ...[
+            if (widget.lockFolder || widget.trustedFolders != null) ...[
               const SizedBox(height: 8),
               Text(
-                '이 폴더는 신뢰 폴더로 등록됩니다. 세션 환경 설정에서 해제할 수 있습니다.',
+                widget.lockFolder
+                    ? '작업 폴더는 그룹 폴더를 따릅니다.'
+                    : '이 폴더는 신뢰 폴더로 등록됩니다. 세션 환경 설정에서 해제할 수 있습니다.',
                 style: TextStyle(
                   fontSize: 11.5,
                   color: context.mac.secondaryLabel,
@@ -678,7 +686,9 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
 
   // 미병합 worktree가 있는 세션의 폴더를 바꾸면 작업 브랜치와 연결이 끊깁니다.
   bool get _canChangeFolder =>
-      !_isBusy && widget.session.activeWorktreeLink == null;
+      widget.session.groupId == null &&
+      !_isBusy &&
+      widget.session.activeWorktreeLink == null;
 
   @override
   void dispose() {
@@ -774,7 +784,9 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
             if (!_canChangeFolder) ...[
               const SizedBox(height: 4),
               Text(
-                _isBusy
+                widget.session.groupId != null
+                    ? '작업 폴더는 그룹 폴더를 따릅니다. 그룹 설정에서 바꿀 수 있습니다.'
+                    : _isBusy
                     ? '실행 중에는 폴더를 바꿀 수 없습니다.'
                     : '병합되지 않은 worktree가 있어 폴더를 바꿀 수 없습니다.',
                 style: TextStyle(fontSize: 11.5, color: mac.secondaryLabel),

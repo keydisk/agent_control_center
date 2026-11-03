@@ -20,6 +20,7 @@ class PromptInputBar extends StatefulWidget {
     required this.onBackendChanged,
     required this.onModelChanged,
     required this.onWorkingDirectoryChanged,
+    this.workingDirectoryLocked = false,
     required this.onSubmit,
     this.selectedEffort = ReasoningEffort.auto,
     this.onEffortChanged,
@@ -38,6 +39,9 @@ class PromptInputBar extends StatefulWidget {
   final ReasoningEffort selectedEffort;
   final ValueChanged<ReasoningEffort>? onEffortChanged;
   final ValueChanged<String> onWorkingDirectoryChanged;
+
+  /// 그룹 세션처럼 폴더를 바꿀 수 없을 때 true입니다.
+  final bool workingDirectoryLocked;
   final void Function(String prompt, List<String> attachments) onSubmit;
   final TargetDeviceType selectedDevice;
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
@@ -519,7 +523,9 @@ class _PromptInputBarState extends State<PromptInputBar> {
         ),
         TextButton.icon(
           key: const ValueKey('workdir_button'),
-          onPressed: _showWorkingDirDialog,
+          onPressed: widget.workingDirectoryLocked
+              ? null
+              : _showWorkingDirDialog,
           style: TextButton.styleFrom(
             foregroundColor: mac.secondaryLabel,
             padding: const EdgeInsets.symmetric(horizontal: 6),

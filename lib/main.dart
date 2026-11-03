@@ -22,6 +22,7 @@ import 'ui/screens/permission_center_screen.dart';
 import 'ui/screens/skills_screen.dart';
 import 'ui/screens/trusted_folders_screen.dart';
 import 'ui/widgets/approval_and_question_dialogs.dart';
+import 'ui/widgets/kv_cache_panel.dart';
 import 'ui/widgets/mac_window_drag_area.dart';
 import 'ui/widgets/multi_session_sidebar.dart';
 import 'ui/widgets/prompt_input_bar.dart';
@@ -82,6 +83,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   StreamSubscription<NotificationDeepLink>? _deepLinkSub;
   bool _showRawLogs = false;
   bool _showSessionSidebar = true;
+  bool _showKvCachePanel = true;
   TargetDeviceType _selectedDevice = TargetDeviceType.macosDesktop;
   final Map<BackendType, BackendInstallationStatus> _installStatuses = {};
   final ScrollController _timelineScroll = ScrollController();
@@ -291,10 +293,11 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
   Future<void> _openNewSessionDialog(String? sourceSessionId) async {
     final source = _sessionById(sourceSessionId);
+    final groupId = source?.groupId;
+    if (groupId != null) return _openNewSessionInGroup(groupId);
     final fallback = source ?? _sessionManager.activeSession;
     final initialBackend = fallback?.backendType ?? BackendType.antigravity;
     final efforts = _sessionManager.effortPreferences;
-    final groupId = source?.groupId;
     final request = await showDialog<NewSessionRequest>(
       context: context,
       builder: (ctx) => NewSessionDialog(
@@ -308,13 +311,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: efforts,
         showInstructions: true,
-        previousSessions: groupId == null
-            ? const []
-            : _sessionManager.groups!.snapshotsFor(groupId),
       ),
     );
     if (request == null) return;
-    _createSessionFrom(request, groupId: groupId);
+    _createSessionFrom(request);
   }
 
   Future<void> _openNewSessionInGroup(String groupId) async {
@@ -332,6 +332,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
         showInstructions: true,
+        lockFolder: true,
         previousSessions: store.snapshotsFor(groupId),
       ),
     );
@@ -370,6 +371,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
         showInstructions: true,
+        lockFolder: parent.groupId != null,
         note: '상위 세션의 컨텍스트를 압축해 가져갑니다.',
       ),
     );
@@ -766,6 +768,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                             ),
                           ),
                         ),
+                      if (_showKvCachePanel) ...[
+                        const VerticalDivider(width: 0.5),
+                        KvCachePanel(
+                          session: active?.usage ?? const TokenUsage(),
+                          usageByBackend: _sessionManager.usageByBackend,
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -783,6 +792,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   selectedBackend: selectedBackend,
                   selectedModel: selectedModel,
                   workingDirectory: workingDir,
+                  workingDirectoryLocked: active?.groupId != null,
                   selectedDevice: _selectedDevice,
                   onDeviceChanged: (device) {
                     setState(() {
@@ -942,6 +952,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
               icon: const Icon(Icons.admin_panel_settings_outlined),
             ),
             IconButton(
+              key: const ValueKey('kv_cache_toggle'),
+              tooltip: 'KV 캐시 ${_showKvCachePanel ? '숨기기' : '보기'}',
+              isSelected: _showKvCachePanel,
+              selectedIcon: Icon(Icons.memory, color: mac.blue),
+              icon: const Icon(Icons.memory),
+              onPressed: () {
+                setState(() {
+                  _showKvCachePanel = !_showKvCachePanel;
+                });
+              },
+            ),
+            IconButton(
               key: const ValueKey('raw_log_toggle'),
               tooltip: '원본 로그 보기',
               isSelected: _showRawLogs,
@@ -1000,7 +1022,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  BackendModelBadge(backend: event.backend, model: event.model),
+                  Flexible(
+                    child: BackendModelBadge(
+                      backend: event.backend,
+                      model: event.model,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1056,11 +1083,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   color: context.mac.red,
                 ),
                 const SizedBox(width: 6),
-                Text(
-                  '사용자가 중지했습니다. 다음 프롬프트로 대화를 이어갈 수 있습니다.',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: context.mac.secondaryLabel,
+                Expanded(
+                  child: Text(
+                    '사용자가 중지했습니다. 다음 프롬프트로 대화를 이어갈 수 있습니다.',
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: context.mac.secondaryLabel,
+                    ),
                   ),
                 ),
               ],
@@ -1077,11 +1106,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 color: context.mac.green,
               ),
               const SizedBox(width: 6),
-              Text(
-                '턴 완료 (${event.durationMs}ms · 총 토큰: ${event.usage.totalTokens})',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: context.mac.secondaryLabel,
+              Expanded(
+                child: Text(
+                  '턴 완료 (${event.durationMs}ms · 총 토큰: ${event.usage.totalTokens})',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: context.mac.secondaryLabel,
+                  ),
                 ),
               ),
             ],

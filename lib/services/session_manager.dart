@@ -434,6 +434,13 @@ class SessionManager extends ChangeNotifier {
       if (globalChanged || session.groupId == group.id) {
         _restartOnNextPrompt(session);
       }
+      // ponytail: 실행 중이거나 미병합 worktree가 있는 세션은 기존 폴더에 남습니다. 함께 옮겨야 하면 병합 후 재적용합니다.
+      if (session.groupId == group.id &&
+          session.status != SessionStatus.running &&
+          session.status != SessionStatus.awaitingApproval &&
+          session.activeWorktreeLink == null) {
+        _moveToDirectory(session, group.folder);
+      }
     }
     notifyListeners();
   }
@@ -1245,13 +1252,19 @@ class SessionManager extends ChangeNotifier {
 
   void updateSessionWorkingDirectory(String sessionId, String dir) {
     final session = _sessions[sessionId];
-    if (session == null) return;
+    // 그룹 세션의 작업 폴더는 그룹 폴더를 따라갑니다.
+    if (session == null || session.groupId != null) return;
+    _moveToDirectory(session, dir);
+    notifyListeners();
+  }
+
+  void _moveToDirectory(ManagedSession session, String dir) {
+    if (session.workingDirectory == dir) return;
     session.isStarted = false;
     session.conversationIdToResume = null;
     session.workingDirectory = dir;
     session.isolatedWorktreePath = null;
     _refreshAllConflictFlags();
-    notifyListeners();
   }
 
   static Future<ProcessResult> _runGit(String dir, List<String> args) =>
