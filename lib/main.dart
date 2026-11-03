@@ -340,6 +340,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         effortPreferences: efforts,
         modelPreferences: _sessionManager.modelPreferences,
         showInstructions: true,
+        previousSessions: _sessionManager.searchSavedSessions(),
       ),
     );
     if (request == null) return;
@@ -886,6 +887,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   ),
                 PromptInputBar(
                   skills: _sessionManager.skillRegistry.skills,
+                  savedSessions: _sessionManager.searchSavedSessions('', 50),
+                  onLoadSession: active == null
+                      ? null
+                      : (s) => _sessionManager.loadSnapshot(active.sessionId, s),
                   selectedBackend: selectedBackend,
                   selectedModel: selectedModel,
                   workingDirectory: workingDir,
@@ -1146,6 +1151,28 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   ),
                 ),
               MarkdownMessageView(markdown: event.text),
+              if (event.id.startsWith('cmd_sys_') &&
+                  (_sessionById(sessionId)?.lastSearchResults.isNotEmpty ??
+                      false)) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final s in _sessionById(sessionId)!.lastSearchResults)
+                      ActionChip(
+                        key: ValueKey('load_session_${s.id}'),
+                        avatar: const Icon(Icons.restore, size: 14),
+                        label: Text(
+                          '${s.title} 불러오기',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () =>
+                            _sessionManager.loadSnapshot(sessionId, s),
+                      ),
+                  ],
+                ),
+              ],
             ],
           ),
         );

@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/skill_registry.dart';
+import '../../services/workspace_group_store.dart';
 
 /// 멀티라인 프롬프트 입력창 + 파일/이미지 첨부 + 백엔드별 슬래시 명령·스킬 자동완성 + 백엔드/모델/폴더 선택 바
 class PromptInputBar extends StatefulWidget {
@@ -31,6 +32,8 @@ class PromptInputBar extends StatefulWidget {
     this.isBusy = false,
     this.onInterrupt,
     this.skills = const [],
+    this.savedSessions = const [],
+    this.onLoadSession,
   });
 
   final BackendType selectedBackend;
@@ -52,6 +55,8 @@ class PromptInputBar extends StatefulWidget {
   final bool isBusy;
   final VoidCallback? onInterrupt;
   final List<SkillDefinition> skills;
+  final List<SessionSnapshot> savedSessions;
+  final ValueChanged<SessionSnapshot>? onLoadSession;
 
   @override
   State<PromptInputBar> createState() => _PromptInputBarState();
@@ -164,6 +169,30 @@ class _PromptInputBarState extends State<PromptInputBar> {
     });
   }
 
+  static final _sessionCmdPattern = RegExp(
+    r'^/(?:load|resume|불러오기|검색)(?:\s+(.*))?$',
+    caseSensitive: false,
+  );
+
+  String? get _sessionSearchQuery {
+    final text = _controller.text;
+    if (text.contains('\n')) return null;
+    final match = _sessionCmdPattern.firstMatch(text);
+    if (match == null) return null;
+    return (match.group(1) ?? '').trim();
+  }
+
+  List<SessionSnapshot> get _sessionSuggestions {
+    final query = _sessionSearchQuery;
+    if (query == null) return const [];
+    final q = query.toLowerCase();
+    final filtered = [
+      for (final s in widget.savedSessions)
+        if (q.isEmpty || s.searchableText.toLowerCase().contains(q)) s,
+    ]..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return filtered.take(10).toList(growable: false);
+  }
+
   List<({String cmd, SkillDefinition? skill})> get _slashSuggestions {
     final query = _controller.text.toLowerCase();
     if (!query.startsWith('/') || query.contains(' ') || query.contains('\n')) {
@@ -190,6 +219,16 @@ class _PromptInputBarState extends State<PromptInputBar> {
     _focusNode.requestFocus();
   }
 
+  void _applySessionSuggestion(SessionSnapshot snapshot) {
+    _controller.clear();
+    if (widget.onLoadSession != null) {
+      widget.onLoadSession!(snapshot);
+    } else {
+      widget.onSubmit('/load ${snapshot.id}', const []);
+    }
+    _focusNode.requestFocus();
+  }
+
   /// 자동완성 목록이 열려 있을 때 ↑/↓로 이동하고 Tab/Enter로 완성합니다.
   KeyEventResult _onPromptKeyEvent(FocusNode node, KeyEvent event) {
     if (event is KeyUpEvent) return KeyEventResult.ignored;
@@ -199,14 +238,20 @@ class _PromptInputBarState extends State<PromptInputBar> {
       return KeyEventResult.handled;
     }
     final suggestions = _slashSuggestions;
-    if (suggestions.isEmpty) return KeyEventResult.ignored;
+    final sessionMatches = suggestions.isEmpty
+        ? _sessionSuggestions
+        : const <SessionSnapshot>[];
+    final count = suggestions.isNotEmpty
+        ? suggestions.length
+        : sessionMatches.length;
+    if (count == 0) return KeyEventResult.ignored;
 
     final key = event.logicalKey;
     if (key == LogicalKeyboardKey.arrowDown ||
         key == LogicalKeyboardKey.arrowUp) {
       final delta = key == LogicalKeyboardKey.arrowDown ? 1 : -1;
       setState(() {
-        _highlightedIndex = (_highlightedIndex + delta) % suggestions.length;
+        _highlightedIndex = (_highlightedIndex + delta) % count;
       });
       return KeyEventResult.handled;
     }
@@ -214,7 +259,11 @@ class _PromptInputBarState extends State<PromptInputBar> {
         (key == LogicalKeyboardKey.tab ||
             key == LogicalKeyboardKey.enter ||
             key == LogicalKeyboardKey.numpadEnter)) {
-      _applySuggestion(suggestions[_highlightedIndex % suggestions.length].cmd);
+      if (suggestions.isNotEmpty) {
+        _applySuggestion(suggestions[_highlightedIndex % count].cmd);
+      } else {
+        _applySessionSuggestion(sessionMatches[_highlightedIndex % count]);
+      }
       return KeyEventResult.handled;
     }
     return KeyEventResult.ignored;
@@ -222,9 +271,16 @@ class _PromptInputBarState extends State<PromptInputBar> {
 
   Widget _buildSlashSuggestions() {
     final suggestions = _slashSuggestions;
-    if (suggestions.isEmpty) return const SizedBox.shrink();
-    final highlighted = _highlightedIndex % suggestions.length;
-    final description = suggestions[highlighted].skill?.description;
+    final sessionMatches = _sessionSuggestions;
+    if (suggestions.isEmpty && sessionMatches.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final highlighted = suggestions.isNotEmpty
+        ? _highlightedIndex % suggestions.length
+        : _highlightedIndex % sessionMatches.length;
+    final description = suggestions.isNotEmpty
+        ? suggestions[highlighted].skill?.description
+        : sessionMatches[highlighted].lastTurn;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
@@ -237,32 +293,64 @@ class _PromptInputBarState extends State<PromptInputBar> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.15,
-            ),
-            child: SingleChildScrollView(
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final (index, item) in suggestions.indexed)
-                    _buildSlashChip(
-                      item.cmd,
-                      avatar: item.skill == null
-                          ? null
-                          : const Icon(Icons.auto_awesome, size: 14),
-                      tooltip: item.skill?.description,
-                      isHighlighted: index == highlighted,
-                    ),
-                ],
+          if (suggestions.isNotEmpty)
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.15,
+              ),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final (index, item) in suggestions.indexed)
+                      _buildSlashChip(
+                        item.cmd,
+                        avatar: item.skill == null
+                            ? null
+                            : const Icon(Icons.auto_awesome, size: 14),
+                        tooltip: item.skill?.description,
+                        isHighlighted: index == highlighted,
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
+          if (sessionMatches.isNotEmpty) ...[
+            if (suggestions.isNotEmpty) const SizedBox(height: 6),
+            ConstrainedBox(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.sizeOf(context).height * 0.2,
+              ),
+              child: SingleChildScrollView(
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final (index, s) in sessionMatches.indexed)
+                      ActionChip(
+                        key: ValueKey('slash_session_${s.id}'),
+                        avatar: const Icon(Icons.history, size: 14),
+                        tooltip: s.lastTurn,
+                        backgroundColor:
+                            suggestions.isEmpty && index == highlighted
+                            ? Theme.of(context).colorScheme.primaryContainer
+                            : null,
+                        label: Text(
+                          '${s.title} (${s.backend.displayName})',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        onPressed: () => _applySessionSuggestion(s),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 6),
           Text(
             key: const ValueKey('slash_suggestion_hint'),
-            '${description == null ? '' : '$description\n'}↑↓ 선택 · Tab/Enter 완성',
+            '${description == null || description.isEmpty ? '' : '$description\n'}↑↓ 선택 · Tab/Enter ${suggestions.isNotEmpty ? '완성' : '불러오기'}',
             maxLines: 3,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 11),
