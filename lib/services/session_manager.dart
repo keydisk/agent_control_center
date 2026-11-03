@@ -686,8 +686,9 @@ class SessionManager extends ChangeNotifier {
 
     session.eventSub = session.backend.events.listen((event) {
       if (event is ApprovalRequestEvent) {
-        if (_isTrustedFileAccess(session, event.request)) {
-          _approveTrustedFileAccess(session, event.request);
+        if (_isTrustedFileAccess(session, event.request) ||
+            _isTrustedAntigravityCommand(session, event.request)) {
+          _approveAutomatically(session, event.request);
           return;
         }
         final preApproved = _permissionCenter.checkPreApproved(event.request);
@@ -755,7 +756,21 @@ class SessionManager extends ChangeNotifier {
         (target == root || p.isWithin(root, target));
   }
 
-  void _approveTrustedFileAccess(
+  /// Auto 모드를 쓸 수 없는 계정의 agy는 일반 명령도 거부하므로 앱이 대신 승인합니다.
+  /// ponytail: 파괴적 판단은 detectDestructive 패턴에 의존합니다. agy Auto 모드를 쓸 수 있으면 이 경로는 거의 타지 않습니다.
+  bool _isTrustedAntigravityCommand(
+    ManagedSession session,
+    ApprovalRequestData req,
+  ) {
+    final store = trustedFolders;
+    return store != null &&
+        session.backendType == BackendType.antigravity &&
+        req.category == ApprovalCategory.shellCommand &&
+        !req.isDestructive &&
+        store.isTrusted(session.workingDirectory);
+  }
+
+  void _approveAutomatically(
     ManagedSession session,
     ApprovalRequestData request,
   ) {
@@ -767,7 +782,7 @@ class SessionManager extends ChangeNotifier {
           requestId: request.id,
           approved: true,
           scope: ApprovalScope.once,
-          reason: '신뢰 폴더 안의 파일 접근',
+          reason: '신뢰 폴더 안의 작업 자동 승인',
         ),
       ),
     );

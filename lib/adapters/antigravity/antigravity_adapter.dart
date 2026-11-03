@@ -100,7 +100,13 @@ class AntigravityAdapter implements AgentBackend {
         '--conversation',
         config.conversationId!,
       ],
-      if (config.autoApproveBypassEnabled) '--dangerously-skip-permissions',
+      if (config.autoApproveBypassEnabled)
+        '--dangerously-skip-permissions'
+      else ...[
+        // 지원하지 않는 계정이면 agy가 경고만 내고 기본 모드로 실행합니다.
+        '--mode',
+        'auto',
+      ],
       if (_allowedRules.isNotEmpty || config.trustedDirectories.isNotEmpty) ...[
         '--settings',
         jsonEncode({

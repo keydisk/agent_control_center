@@ -75,8 +75,9 @@ class ClaudeCodeAdapter implements AgentBackend {
       if (config.autoApproveBypassEnabled)
         '--dangerously-skip-permissions'
       else ...[
+        // 안전한 작업은 Claude의 자동 판단에 맡기고, 판단이 필요한 것만 승인창으로 받습니다.
         '--permission-mode',
-        'manual',
+        'auto',
       ],
       ...config.extraArgs,
     ];
