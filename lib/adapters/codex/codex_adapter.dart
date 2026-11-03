@@ -140,10 +140,9 @@ class CodexAdapter implements AgentBackend {
       ],
       if (cfg.autoApproveBypassEnabled)
         '--dangerously-bypass-approvals-and-sandbox'
-      else ...[
-        '-s',
-        'workspace-write',
-      ],
+      else
+        // workspace-write 샌드박스를 쓰고, 벗어나는 요청은 Codex의 자동 검토에 맡깁니다.
+        '--approve-for-me',
       for (final dir in cfg.trustedDirectories)
         if (dir != cfg.workingDirectory) ...['--add-dir', dir],
       for (final img in attachments) ...['-i', img],

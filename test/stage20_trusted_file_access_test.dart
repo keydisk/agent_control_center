@@ -132,6 +132,7 @@ void main() {
     backend = _FakeBackend();
     manager.createSession(
       sessionId: 's',
+      backendType: BackendType.claudeCode,
       backendOverride: backend,
       workingDirectory: trusted.path,
     );
@@ -220,6 +221,80 @@ void main() {
       );
       await plain.sendPrompt('p', '요청');
       expect(own.lastConfig!.trustedDirectories, isEmpty);
+    });
+  });
+
+  group('Antigravity 명령 자동 승인', () {
+    late _FakeBackend agy;
+
+    void createAgySession(String folder) {
+      agy = _FakeBackend();
+      manager.createSession(
+        sessionId: 'agy',
+        backendType: BackendType.antigravity,
+        backendOverride: agy,
+        workingDirectory: folder,
+      );
+    }
+
+    test('신뢰 폴더의 일반 명령은 묻지 않고 파괴적 명령은 묻는다', () {
+      createAgySession(trusted.path);
+      agy.eventCtrl.add(_request('run_command', {'CommandLine': 'find lib'}));
+      expect(agy.decisions.single.approved, isTrue);
+      expect(asked, isEmpty);
+
+      agy.eventCtrl.add(
+        _request('run_command', {'CommandLine': 'rm -rf build'}, id: 'r2'),
+      );
+      expect(agy.decisions, hasLength(1));
+      expect(asked, hasLength(1));
+    });
+
+    test('신뢰하지 않은 폴더의 명령은 묻는다', () {
+      createAgySession(other.path);
+      agy.eventCtrl.add(_request('run_command', {'CommandLine': 'find lib'}));
+      expect(agy.decisions, isEmpty);
+      expect(asked, hasLength(1));
+    });
+  });
+
+  group('자동 권한 모드', () {
+    test('백엔드별 자동 모드로 시작하고 건너뛰기 옵션은 쓰지 않는다', () async {
+      final spawner = _Spawner();
+      final claude = ClaudeCodeAdapter(spawner: spawner);
+      final codex = CodexAdapter(spawner: spawner);
+      final bridge = LocalHookBridgeServer();
+      final agy = AntigravityAdapter(
+        spawner: spawner,
+        hookBridge: bridge,
+        userSettingsFile: File('/nonexistent/settings.json'),
+      );
+      addTearDown(() async {
+        await claude.dispose();
+        await codex.dispose();
+        await agy.dispose();
+        await bridge.dispose();
+      });
+      AgentSessionConfig config(BackendType backend) => AgentSessionConfig(
+        sessionId: 's',
+        backendType: backend,
+        workingDirectory: '/tmp',
+      );
+      await claude.start(config(BackendType.claudeCode));
+      await agy.start(config(BackendType.antigravity));
+      await codex.start(config(BackendType.codex));
+      await codex.send('요청');
+
+      final claudeArgs = spawner.arguments[0];
+      expect(claudeArgs[claudeArgs.indexOf('--permission-mode') + 1], 'auto');
+      final agyArgs = spawner.arguments[1];
+      expect(agyArgs[agyArgs.indexOf('--mode') + 1], 'auto');
+      final codexArgs = spawner.arguments[2];
+      expect(codexArgs, contains('--approve-for-me'));
+      expect(codexArgs, isNot(contains('-s')), reason: '함께 쓸 수 없는 옵션');
+      for (final args in spawner.arguments) {
+        expect(args.join(' '), isNot(contains('dangerously')));
+      }
     });
   });
 
