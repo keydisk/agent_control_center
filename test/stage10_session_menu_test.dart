@@ -273,6 +273,70 @@ void main() {
       expect(find.text('실행 중에는 폴더를 바꿀 수 없습니다.'), findsOneWidget);
     });
 
+    group('상단 신뢰 폴더 표시', () {
+      Finder indicator() =>
+          find.byKey(const ValueKey('trusted_folder_indicator'));
+
+      Finder inIndicator(String text) =>
+          find.descendant(of: indicator(), matching: find.text(text));
+
+      testWidgets('신뢰된 작업 폴더를 표시한다', (tester) async {
+        store.add(project.path);
+        await pumpHome(tester);
+        expect(inIndicator('project'), findsOneWidget);
+      });
+
+      testWidgets('상위 폴더로 신뢰되면 가장 가까운 등록 폴더를 표시한다', (tester) async {
+        store.add(temp.path);
+        await pumpHome(tester);
+        final parentName = temp.path.split('/').last;
+        expect(inIndicator(parentName), findsOneWidget);
+
+        store.add(project.path);
+        manager.updateSessionTitle('s1', '갱신');
+        await tester.pump();
+        expect(inIndicator('project'), findsOneWidget);
+      });
+
+      testWidgets('신뢰하지 않은 폴더는 상태를 알리고 누르면 환경 설정을 연다', (tester) async {
+        await pumpHome(tester);
+        expect(inIndicator('신뢰 안 됨 · project'), findsOneWidget);
+        await tester.tap(indicator());
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('session_settings_dialog')),
+          findsOneWidget,
+        );
+      });
+
+      testWidgets('환경 설정에서 해제하면 표시가 바뀌고 세션이 없으면 사라진다', (tester) async {
+        store.add(project.path);
+        await pumpHome(tester);
+        await tester.tap(indicator());
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('session_settings_trust')));
+        await tester.pump();
+        await pick(tester, 'save_session_settings_button');
+        expect(inIndicator('신뢰 안 됨 · project'), findsOneWidget);
+
+        // 정리 Future를 기다리면 가짜 시간에서 멈추므로 목록 갱신만 확인합니다.
+        unawaited(manager.deleteSession('s1'));
+        await tester.pump();
+        expect(indicator(), findsNothing);
+      });
+
+      testWidgets('좁은 창에서도 넘치지 않는다', (tester) async {
+        final long = Directory('${temp.path}/${'아주긴폴더이름' * 12}')..createSync();
+        store.add(long.path);
+        manager.updateSessionWorkingDirectory('s1', long.path);
+        await pumpHome(tester);
+        tester.view.physicalSize = const Size(860, 700);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull);
+        expect(indicator(), findsOneWidget);
+      });
+    });
+
     testWidgets('삭제는 확인 후 수행하고 마지막 세션이면 안내를 표시한다', (tester) async {
       await pumpHome(tester);
       await openMenu(tester);
