@@ -32,6 +32,8 @@ enum BackendType {
     defaultEffort: ReasoningEffort.high,
     effortInModelId: true,
     slashCommands: [
+      '/load',
+      '/resume',
       '/help',
       '/skills',
       '/model',
@@ -59,6 +61,8 @@ enum BackendType {
       'opus',
     ],
     slashCommands: [
+      '/load',
+      '/resume',
       '/compact',
       '/clear',
       '/model',
@@ -86,6 +90,8 @@ enum BackendType {
       'codex-auto-review',
     ],
     slashCommands: [
+      '/load',
+      '/resume',
       '/review',
       '/compact',
       '/model',
@@ -419,10 +425,24 @@ class FileDiffItem {
     this.unifiedDiff = '',
   });
 
+  factory FileDiffItem.fromJson(Map<String, dynamic> json) => FileDiffItem(
+    filePath: (json['filePath'] ?? '') as String,
+    oldContent: (json['oldContent'] ?? '') as String,
+    newContent: (json['newContent'] ?? '') as String,
+    unifiedDiff: (json['unifiedDiff'] ?? '') as String,
+  );
+
   final String filePath;
   final String oldContent;
   final String newContent;
   final String unifiedDiff;
+
+  Map<String, dynamic> toJson() => {
+    'filePath': filePath,
+    'oldContent': oldContent,
+    'newContent': newContent,
+    'unifiedDiff': unifiedDiff,
+  };
 
   String computeUnifiedDiff() {
     if (unifiedDiff.isNotEmpty) return unifiedDiff;
@@ -456,6 +476,16 @@ class TokenUsage {
     this.costUsd = 0.0,
   });
 
+  factory TokenUsage.fromJson(Map<String, dynamic> json) => TokenUsage(
+    inputTokens: (json['inputTokens'] as num?)?.toInt() ?? 0,
+    outputTokens: (json['outputTokens'] as num?)?.toInt() ?? 0,
+    thinkingTokens: (json['thinkingTokens'] as num?)?.toInt() ?? 0,
+    cachedTokens: (json['cachedTokens'] as num?)?.toInt() ?? 0,
+    promptTokens: (json['promptTokens'] as num?)?.toInt() ?? 0,
+    totalTokens: (json['totalTokens'] as num?)?.toInt() ?? 0,
+    costUsd: (json['costUsd'] as num?)?.toDouble() ?? 0.0,
+  );
+
   final int inputTokens;
   final int outputTokens;
   final int thinkingTokens;
@@ -467,6 +497,16 @@ class TokenUsage {
   final double costUsd;
 
   double get cacheHitRate => promptTokens == 0 ? 0 : cachedTokens / promptTokens;
+
+  Map<String, dynamic> toJson() => {
+    'inputTokens': inputTokens,
+    'outputTokens': outputTokens,
+    'thinkingTokens': thinkingTokens,
+    'cachedTokens': cachedTokens,
+    'promptTokens': promptTokens,
+    'totalTokens': totalTokens,
+    'costUsd': costUsd,
+  };
 
   TokenUsage operator +(TokenUsage other) {
     return TokenUsage(
@@ -499,6 +539,130 @@ sealed class AgentEvent {
   final String rawLog;
 
   String get eventKind;
+
+  Map<String, dynamic> _baseJson() => {
+    'kind': eventKind,
+    'id': id,
+    'sessionId': sessionId,
+    'backend': backend.id,
+    'model': model,
+    'timestamp': timestamp.toIso8601String(),
+    if (rawLog.isNotEmpty) 'rawLog': rawLog,
+  };
+
+  Map<String, dynamic> toJson();
+
+  static AgentEvent? fromJson(Map<String, dynamic> json) {
+    final kind = json['kind'] as String?;
+    final id = (json['id'] ?? '') as String;
+    final sessionId = (json['sessionId'] ?? '') as String;
+    final backend = BackendType.fromId((json['backend'] ?? 'agy') as String);
+    final model = (json['model'] ?? '') as String;
+    final timestamp =
+        DateTime.tryParse((json['timestamp'] ?? '') as String) ??
+        DateTime.now();
+    final rawLog = (json['rawLog'] ?? '') as String;
+
+    return switch (kind) {
+      'message' => MessageEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        role: (json['role'] ?? 'assistant') as String,
+        text: (json['text'] ?? '') as String,
+        thinking: (json['thinking'] ?? '') as String,
+        isDelta: (json['isDelta'] as bool?) ?? false,
+      ),
+      'tool_call' => ToolCallEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        toolName: (json['toolName'] ?? '') as String,
+        arguments: json['arguments'] is Map
+            ? Map<String, dynamic>.from(json['arguments'] as Map)
+            : const {},
+        result: (json['result'] ?? '') as String,
+        isRunning: (json['isRunning'] as bool?) ?? false,
+        isError: (json['isError'] as bool?) ?? false,
+        durationMs: (json['durationMs'] as num?)?.toInt() ?? 0,
+      ),
+      'file_diff' => FileDiffEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        diff: json['diff'] is Map
+            ? FileDiffItem.fromJson(
+                Map<String, dynamic>.from(json['diff'] as Map),
+              )
+            : const FileDiffItem(filePath: ''),
+      ),
+      'skill_invoked' => SkillInvokedEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        skillName: (json['skillName'] ?? '') as String,
+        skillPath: (json['skillPath'] ?? '') as String,
+        reason: (json['reason'] ?? '') as String,
+      ),
+      'child_worktree' => ChildWorktreeEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        childSessionId: (json['childSessionId'] ?? '') as String,
+        childTitle: (json['childTitle'] ?? '') as String,
+        message: (json['message'] ?? '') as String,
+        status:
+            ChildWorktreeStatus.values.asNameMap()[json['status']] ??
+            ChildWorktreeStatus.completed,
+        summary: (json['summary'] ?? '') as String,
+        needsAttention: (json['needsAttention'] as bool?) ?? false,
+        canMerge: (json['canMerge'] as bool?) ?? false,
+      ),
+      'error' => ErrorEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        message: (json['message'] ?? '') as String,
+        code: (json['code'] ?? '') as String,
+        isFatal: (json['isFatal'] as bool?) ?? false,
+      ),
+      'done' => DoneEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: backend,
+        model: model,
+        timestamp: timestamp,
+        rawLog: rawLog,
+        conversationId: (json['conversationId'] ?? '') as String,
+        usage: json['usage'] is Map
+            ? TokenUsage.fromJson(
+                Map<String, dynamic>.from(json['usage'] as Map),
+              )
+            : const TokenUsage(),
+        durationMs: (json['durationMs'] as num?)?.toInt() ?? 0,
+        stopReason: (json['stopReason'] ?? 'completed') as String,
+      ),
+      _ => null,
+    };
+  }
 }
 
 class MessageEvent extends AgentEvent {
@@ -522,6 +686,15 @@ class MessageEvent extends AgentEvent {
 
   @override
   String get eventKind => 'message';
+
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'role': role,
+    'text': text,
+    if (thinking.isNotEmpty) 'thinking': thinking,
+    if (isDelta) 'isDelta': isDelta,
+  };
 }
 
 class ToolCallEvent extends AgentEvent {
@@ -566,6 +739,17 @@ class ToolCallEvent extends AgentEvent {
   @override
   String get eventKind => 'tool_call';
 
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'toolName': toolName,
+    'arguments': arguments,
+    'result': result,
+    'isRunning': isRunning,
+    'isError': isError,
+    'durationMs': durationMs,
+  };
+
   ToolCallEvent copyWith({
     Map<String, dynamic>? arguments,
     String? result,
@@ -606,6 +790,9 @@ class ApprovalRequestEvent extends AgentEvent {
 
   @override
   String get eventKind => 'approval_request';
+
+  @override
+  Map<String, dynamic> toJson() => _baseJson();
 }
 
 class QuestionEvent extends AgentEvent {
@@ -624,6 +811,9 @@ class QuestionEvent extends AgentEvent {
 
   @override
   String get eventKind => 'question';
+
+  @override
+  Map<String, dynamic> toJson() => _baseJson();
 }
 
 class FileDiffEvent extends AgentEvent {
@@ -641,6 +831,9 @@ class FileDiffEvent extends AgentEvent {
 
   @override
   String get eventKind => 'file_diff';
+
+  @override
+  Map<String, dynamic> toJson() => {..._baseJson(), 'diff': diff.toJson()};
 }
 
 class SkillInvokedEvent extends AgentEvent {
@@ -662,6 +855,14 @@ class SkillInvokedEvent extends AgentEvent {
 
   @override
   String get eventKind => 'skill_invoked';
+
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'skillName': skillName,
+    'skillPath': skillPath,
+    'reason': reason,
+  };
 }
 
 enum ChildWorktreeStatus {
@@ -702,6 +903,18 @@ class ChildWorktreeEvent extends AgentEvent {
 
   @override
   String get eventKind => 'child_worktree';
+
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'childSessionId': childSessionId,
+    'childTitle': childTitle,
+    'message': message,
+    'status': status.name,
+    'summary': summary,
+    'needsAttention': needsAttention,
+    'canMerge': canMerge,
+  };
 }
 
 class ErrorEvent extends AgentEvent {
@@ -723,6 +936,14 @@ class ErrorEvent extends AgentEvent {
 
   @override
   String get eventKind => 'error';
+
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'message': message,
+    'code': code,
+    'isFatal': isFatal,
+  };
 }
 
 class DoneEvent extends AgentEvent {
@@ -748,4 +969,13 @@ class DoneEvent extends AgentEvent {
 
   @override
   String get eventKind => 'done';
+
+  @override
+  Map<String, dynamic> toJson() => {
+    ..._baseJson(),
+    'conversationId': conversationId,
+    'usage': usage.toJson(),
+    'durationMs': durationMs,
+    'stopReason': stopReason,
+  };
 }

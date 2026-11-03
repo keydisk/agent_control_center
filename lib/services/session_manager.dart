@@ -128,6 +128,7 @@ class ManagedSession {
   final List<String> rawLogs;
   final Set<String> resolvedRequestIds = {};
   final List<WorktreeLink> worktreeLinks = [];
+  List<SessionSnapshot> lastSearchResults = const [];
 
   /// 현재 작업 중이며 아직 병합되지 않은 worktree 연결
   WorktreeLink? get activeWorktreeLink =>
@@ -186,7 +187,8 @@ class SessionManager extends ChangeNotifier {
        // 주입된 할당기의 경로는 실제 checkout이 아닐 수 있어 연결 정보를 읽지 않습니다.
        _resolveWorktreeLink = worktreeAllocator == null
            ? _defaultWorktreeLinkResolver
-           : ((_, _) async => null);
+           : ((_, _) async => null),
+       _historyStore = groups ?? WorkspaceGroupStore();
 
   final BackendRegistry _registry;
   final PermissionCenter _permissionCenter;
@@ -194,6 +196,7 @@ class SessionManager extends ChangeNotifier {
   final AgentOrchestrator _orchestrator;
   final WorktreeAllocator _worktreeAllocator;
   final WorktreeLinkResolver _resolveWorktreeLink;
+  final WorkspaceGroupStore _historyStore;
 
   /// null이면 폴더 신뢰 검사를 하지 않습니다.
   final TrustedFolderStore? trustedFolders;
@@ -348,6 +351,9 @@ class SessionManager extends ChangeNotifier {
         handoffLabel,
       );
     }
+    if (session.events.isNotEmpty) {
+      _recordSnapshot(session);
+    }
     notifyListeners();
     return session;
   }
@@ -387,8 +393,9 @@ class SessionManager extends ChangeNotifier {
   Future<void> _prepareHandoff(
     ManagedSession session,
     String transcript,
-    String label,
-  ) async {
+    String label, {
+    List<AgentEvent> restoredEvents = const [],
+  }) async {
     final compressed = transcript.length > handoffCompressionThreshold
         ? await _compressWithAgent(session, transcript)
         : null;
@@ -408,6 +415,9 @@ class SessionManager extends ChangeNotifier {
             '${compressed == null ? '가져왔습니다' : '$handoffSkillName 스킬로 압축해 가져왔습니다'}.',
       ),
     );
+    if (restoredEvents.isNotEmpty) {
+      session.events.addAll(restoredEvents);
+    }
     notifyListeners();
   }
 
@@ -469,16 +479,53 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 그룹에 남은 스냅샷의 마지막 작업을 이어받습니다.
+  /// 스냅샷의 작업 내용과 컨텍스트를 이어받습니다.
   void continueFromSnapshot(String sessionId, SessionSnapshot snapshot) {
     final session = _sessions[sessionId];
     if (session == null) return;
+    if (snapshot.conversationId != null &&
+        snapshot.backend == session.backendType) {
+      session.conversationIdToResume ??= snapshot.conversationId;
+    }
+    final transcript = snapshot.events.isNotEmpty
+        ? buildSessionTranscript(snapshot.events)
+        : snapshot.lastTurn;
     session.handoffReady = _prepareHandoff(
       session,
-      snapshot.lastTurn,
+      transcript,
       '이전 세션 "${snapshot.title}"',
+      restoredEvents: snapshot.restoredEvents(sessionId: session.sessionId),
     );
   }
+
+  /// 저장된 세션 스냅샷의 대화 내용과 컨텍스트를 현재 세션으로 불러옵니다.
+  Future<void> loadSnapshot(String sessionId, SessionSnapshot snapshot) async {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    if (session.autoTitle || session.title.startsWith('작업 #')) {
+      session.title = snapshot.title;
+      session.autoTitle = false;
+    }
+    session.events.clear();
+    session.lastSearchResults = const [];
+    session.conversationIdToResume = snapshot.backend == session.backendType
+        ? snapshot.conversationId
+        : null;
+    session.isStarted = false;
+    continueFromSnapshot(sessionId, snapshot);
+    await session.handoffReady;
+    _recordSnapshot(session);
+    notifyListeners();
+  }
+
+  /// 저장된 세션을 키워드로 검색합니다. 키워드가 비어 있으면 최근 날짜순으로 상위 [limit]개(기본 10개)를 반환합니다.
+  List<SessionSnapshot> searchSavedSessions([
+    String query = '',
+    int limit = 10,
+  ]) => _historyStore.searchSessions(query, limit);
+
+  void recordSessionSnapshot(SessionSnapshot snapshot) =>
+      _historyStore.recordSession(snapshot);
 
   void saveGroup(WorkspaceGroup group, {String? defaultInstructions}) {
     final store = groups;
@@ -529,18 +576,25 @@ class SessionManager extends ChangeNotifier {
   }
 
   void _recordSnapshot(ManagedSession session) {
-    final groupId = session.groupId;
-    if (groupId == null) return;
     final lastTurn = buildSessionTranscript(session.events, lastTurnOnly: true);
-    if (lastTurn.isEmpty) return;
-    groups?.recordSnapshot(
-      groupId,
+    if (lastTurn.isEmpty && session.events.isEmpty) return;
+    _historyStore.recordSession(
       SessionSnapshot(
         id: session.snapshotId,
         title: session.title,
         backend: session.backendType,
-        lastTurn: lastTurn,
+        lastTurn: lastTurn.isNotEmpty
+            ? lastTurn
+            : buildSessionTranscript(session.events),
         updatedAt: DateTime.now(),
+        events: List.of(session.events),
+        conversationId:
+            session.backend.remoteConversationId ??
+            session.conversationIdToResume,
+        model: session.model,
+        effort: session.effort,
+        workingDirectory: session.workingDirectory,
+        groupId: session.groupId,
       ),
     );
   }
@@ -1002,7 +1056,7 @@ class SessionManager extends ChangeNotifier {
     if (_activeSessionId == sessionId) {
       _activeSessionId = _sessions.keys.lastOrNull;
     }
-    groups?.removeSnapshot(session.snapshotId);
+    _historyStore.removeSnapshot(session.snapshotId);
     for (final other in _sessions.values) {
       if (other.parentSessionId == sessionId) {
         other.parentSessionId = session.parentSessionId;
@@ -1043,6 +1097,71 @@ class SessionManager extends ChangeNotifier {
     store.add(dir);
   }
 
+  static final _loadCommandPattern = RegExp(
+    r'^/(?:load|resume|불러오기|검색)(?:\s+(.*))?$',
+    caseSensitive: false,
+  );
+
+  Future<void> _handleLoadCommand(
+    ManagedSession session,
+    String rawCommand,
+    String keyword,
+  ) async {
+    final results = searchSavedSessions(keyword, 10);
+    session.lastSearchResults = results;
+    if (keyword.isNotEmpty) {
+      final lower = keyword.toLowerCase();
+      final exact = results
+          .where(
+            (s) =>
+                s.id.toLowerCase() == lower || s.title.toLowerCase() == lower,
+          )
+          .firstOrNull;
+      final target = exact ?? (results.length == 1 ? results.single : null);
+      if (target != null) {
+        await loadSnapshot(session.sessionId, target);
+        session.lastSearchResults = results;
+        notifyListeners();
+        return;
+      }
+    }
+    final now = DateTime.now();
+    final lines = <String>[
+      if (results.isEmpty)
+        keyword.isEmpty
+            ? '저장된 세션이 없습니다.'
+            : '"$keyword" 키워드와 일치하는 저장된 세션이 없습니다.'
+      else ...[
+        keyword.isEmpty
+            ? '최근 저장된 세션 목록 (상위 ${results.length}개):'
+            : '"$keyword" 검색 결과 (최근 날짜순 상위 ${results.length}개):',
+        for (final (i, s) in results.indexed)
+          '${i + 1}. **${s.title}** (${s.backend.displayName} · ${s.updatedAt.toIso8601String().split('T').first}) — ${s.lastTurn.replaceAll('\n', ' ')}',
+      ],
+    ];
+    session.events.addAll([
+      MessageEvent(
+        id: 'cmd_user_${now.microsecondsSinceEpoch}',
+        sessionId: session.sessionId,
+        backend: session.backendType,
+        model: session.model,
+        timestamp: now,
+        role: 'user',
+        text: rawCommand,
+      ),
+      MessageEvent(
+        id: 'cmd_sys_${now.microsecondsSinceEpoch}',
+        sessionId: session.sessionId,
+        backend: session.backendType,
+        model: session.model,
+        timestamp: now,
+        role: 'system',
+        text: lines.join('\n'),
+      ),
+    ]);
+    notifyListeners();
+  }
+
   Future<void> sendPrompt(
     String sessionId,
     String prompt, {
@@ -1052,6 +1171,16 @@ class SessionManager extends ChangeNotifier {
   }) async {
     final session = _sessions[sessionId];
     if (session == null) return;
+
+    final loadMatch = _loadCommandPattern.firstMatch(prompt.trim());
+    if (loadMatch != null) {
+      await _handleLoadCommand(
+        session,
+        prompt.trim(),
+        (loadMatch.group(1) ?? '').trim(),
+      );
+      return;
+    }
 
     session.lastPrompt = prompt;
     session.lastAttachments = List.of(attachments);
@@ -1182,7 +1311,8 @@ class SessionManager extends ChangeNotifier {
 
     final shouldAutoEvaluate =
         autoOrchestrateByAntigravity &&
-        masterSession.backendType == BackendType.antigravity;
+        masterSession.backendType == BackendType.antigravity &&
+        !_loadCommandPattern.hasMatch(prompt.trim());
 
     final plan = _orchestrator.evaluatePrompt(
       prompt,
@@ -1413,6 +1543,7 @@ class SessionManager extends ChangeNotifier {
     if (session == null || session.title == title) return;
     session.title = title;
     session.autoTitle = false;
+    _recordSnapshot(session);
     notifyListeners();
   }
 

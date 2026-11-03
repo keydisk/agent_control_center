@@ -936,5 +936,119 @@ void main() {
       expect(manager.activeSession!.groupId, isNull);
       expect(find.byKey(const ValueKey('session_card_s1')), findsOneWidget);
     });
+
+    test('그룹 없는 세션도 대화 내용을 파일에 저장하고 불러오며 커맨드로 최근 10개 검색·로딩한다', () async {
+      final file = File('${temp.path}/sessions.json');
+      final persistedStore = WorkspaceGroupStore(file: file);
+      final mgr1 = SessionManager(groups: persistedStore);
+      addTearDown(mgr1.dispose);
+
+      final backend = _FakeBackend();
+      mgr1.createSession(
+        sessionId: 'saved_1',
+        title: '차트 대시보드 구현',
+        backendOverride: backend,
+        workingDirectory: temp.path,
+      );
+      backend.eventCtrl.add(_user('사용량 그래프를 그려줘'));
+      backend.finishTurn('막대 그래프와 숫자 카드를 추가했습니다.');
+      await _settle();
+
+      // 파일에서 다시 읽어도 전체 이벤트 내용이 복원되는지 확인
+      final reloadedStore = WorkspaceGroupStore(file: file);
+      final saved = reloadedStore.searchSessions('그래프');
+      expect(saved, hasLength(1));
+      expect(saved.single.title, '차트 대시보드 구현');
+      expect(saved.single.events.whereType<MessageEvent>(), hasLength(2));
+
+      // 12개 세션을 시간순으로 추가했을 때 키워드 없이 검색하면 최근 날짜순 상위 10개만 반환
+      for (var i = 1; i <= 12; i++) {
+        reloadedStore.recordSession(
+          SessionSnapshot(
+            id: 'hist_$i',
+            title: '세션 기록 $i',
+            backend: BackendType.claudeCode,
+            lastTurn: '사용자: 질문 $i\n에이전트: 답변 $i',
+            updatedAt: DateTime.now().add(Duration(days: i)),
+          ),
+        );
+      }
+      final top10 = reloadedStore.searchSessions();
+      expect(top10, hasLength(10));
+      expect(top10.first.id, 'hist_12');
+      expect(top10.last.id, 'hist_3');
+
+      // 새 매니저에서 /load 커맨드로 검색 및 세션 내용 불러오기 확인
+      final mgr2 = SessionManager(groups: reloadedStore);
+      addTearDown(mgr2.dispose);
+      final target = mgr2.createSession(
+        sessionId: 'active_s',
+        backendOverride: _FakeBackend(),
+        workingDirectory: temp.path,
+      );
+
+      // 키워드 없이 /load 실행 -> 최근 날짜순 상위 10개 목록 표시
+      await mgr2.sendPrompt(target.sessionId, '/load');
+      expect(target.lastSearchResults, hasLength(10));
+      expect(target.lastSearchResults.first.id, 'hist_12');
+      expect(
+        target.events.whereType<MessageEvent>().last.text,
+        contains('최근 저장된 세션 목록 (상위 10개)'),
+      );
+
+      // 키워드로 /load 실행 -> 일치하는 세션을 찾아 대화 내용을 타임라인에 로딩
+      await mgr2.sendPrompt(target.sessionId, '/load 막대 그래프');
+      final texts = target.events
+          .whereType<MessageEvent>()
+          .map((e) => e.text)
+          .toList();
+      expect(texts, contains('사용량 그래프를 그려줘'));
+      expect(texts, contains('막대 그래프와 숫자 카드를 추가했습니다.'));
+    });
+
+    testWidgets('/load 커맨드 입력 시 최근 10개 세션을 보여주고 선택하면 타임라인에 내용을 불러온다', (
+      tester,
+    ) async {
+      for (var i = 1; i <= 12; i++) {
+        store.recordSession(
+          SessionSnapshot(
+            id: 'snap_$i',
+            title: '작업 기록 $i',
+            backend: BackendType.antigravity,
+            lastTurn: '사용자: 요청 $i\n에이전트: 완료 응답 $i',
+            updatedAt: DateTime(2026, 2, i),
+            events: [
+              _user('요청 $i'),
+              _assistant('완료 응답 $i'),
+            ],
+          ),
+        );
+      }
+      manager.createSession(
+        sessionId: 'current',
+        backendOverride: _FakeBackend(),
+        workingDirectory: temp.path,
+      );
+      await pumpHome(tester);
+
+      final field = find.byKey(const ValueKey('prompt_textfield'));
+      await tester.enterText(field, '/load ');
+      await tester.pumpAndSettle();
+
+      // 최근 날짜순 상위 10개(snap_12 ~ snap_3)만 표시되고 snap_1, snap_2는 제외됨
+      expect(find.byKey(const ValueKey('slash_session_snap_12')), findsOneWidget);
+      expect(find.byKey(const ValueKey('slash_session_snap_3')), findsOneWidget);
+      expect(find.byKey(const ValueKey('slash_session_snap_2')), findsNothing);
+      expect(find.byKey(const ValueKey('slash_session_snap_1')), findsNothing);
+
+      // 키워드 입력 시 필터링되고 클릭하면 세션 내용이 타임라인에 로드됨
+      await tester.enterText(field, '/load 요청 1');
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('slash_session_snap_1')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('요청 1'), findsOneWidget);
+      expect(find.text('완료 응답 1'), findsOneWidget);
+    });
   });
 }
