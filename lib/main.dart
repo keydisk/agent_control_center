@@ -693,6 +693,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     required List<String> rawLogs,
     required bool isBusy,
   }) {
+    final fileChanges = events.whereType<FileDiffEvent>().toList();
+    final timelineEvents = events.where((e) => e is! FileDiffEvent).toList();
     return Row(
       children: [
         if (_showSessionSidebar)
@@ -808,13 +810,19 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                             : ListView.builder(
                                 controller: _timelineScroll,
                                 padding: const EdgeInsets.all(16),
-                                itemCount: events.length,
-                                itemBuilder: (context, index) =>
-                                    _buildTimelineItem(
-                                      active?.sessionId ?? 'session_1',
-                                      events[index],
-                                      active?.resolvedRequestIds ?? const {},
-                                    ),
+                                itemCount:
+                                    timelineEvents.length +
+                                    (fileChanges.isEmpty ? 0 : 1),
+                                itemBuilder: (context, index) {
+                                  if (index == timelineEvents.length) {
+                                    return FileChangesCard(events: fileChanges);
+                                  }
+                                  return _buildTimelineItem(
+                                    active?.sessionId ?? 'session_1',
+                                    timelineEvents[index],
+                                    active?.resolvedRequestIds ?? const {},
+                                  );
+                                },
                               ),
                       ),
                       if (_showRawLogs)
