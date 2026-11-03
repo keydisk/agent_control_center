@@ -55,6 +55,10 @@ class ClaudeCodeAdapter implements AgentBackend {
       '--permission-prompts',
       'host',
       if (config.model.isNotEmpty) ...['--model', config.model],
+      if (config.effort != ReasoningEffort.auto) ...[
+        '--effort',
+        config.effort.name,
+      ],
       if (config.systemPromptAppend.isNotEmpty) ...[
         '--append-system-prompt',
         config.systemPromptAppend,

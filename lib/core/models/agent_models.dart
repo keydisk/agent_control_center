@@ -124,6 +124,19 @@ enum BackendType {
   }
 }
 
+/// CLI에 전달하는 추론 강도. [auto]는 옵션을 넘기지 않아 CLI·모델 기본값을 따릅니다.
+enum ReasoningEffort {
+  auto('기본'),
+  low('낮음'),
+  medium('중간'),
+  high('높음'),
+  xhigh('매우 높음'),
+  max('최대');
+
+  const ReasoningEffort(this.label);
+  final String label;
+}
+
 enum ApprovalScope {
   once('이번만 허용'),
   session('이 세션 동안 허용'),
