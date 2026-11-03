@@ -218,6 +218,10 @@ void main() {
       expect(find.text('에이전트 컨트롤 센터'), findsOneWidget);
       expect(find.text('run_command(flutter test)'), findsOneWidget);
       expect(find.text('파일 변경 Diff: lib/main.dart'), findsOneWidget);
+      expect(find.text('- int x = 1;'), findsNothing);
+      await tester.tap(find.text('파일 변경 Diff: lib/main.dart'));
+      await tester.pumpAndSettle();
+      expect(find.text('- int x = 1;'), findsOneWidget);
       expect(find.byKey(const ValueKey('device_dropdown')), findsOneWidget);
 
       // 원본 로그 토글 확인
