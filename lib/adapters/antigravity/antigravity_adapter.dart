@@ -73,10 +73,9 @@ class AntigravityAdapter implements AgentBackend {
       'stream-json',
       '--output-format',
       'stream-json',
-      if (config.model.isNotEmpty) ...['--model', config.model],
-      if (config.effort != ReasoningEffort.auto) ...[
-        '--effort',
-        config.effort.name,
+      if (config.model.isNotEmpty || config.effort != ReasoningEffort.auto) ...[
+        '--model',
+        backendType.cliModel(config.effectiveModel, config.effort),
       ],
       if (config.conversationId != null &&
           config.conversationId!.isNotEmpty) ...[
@@ -198,10 +197,7 @@ class AntigravityAdapter implements AgentBackend {
   }
 
   @override
-  Future<void> resume(
-    String conversationId,
-    AgentSessionConfig config,
-  ) async {
+  Future<void> resume(String conversationId, AgentSessionConfig config) async {
     await start(
       AgentSessionConfig(
         sessionId: config.sessionId,

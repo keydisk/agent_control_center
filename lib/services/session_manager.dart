@@ -113,6 +113,10 @@ class ManagedSession {
   StreamSubscription<AgentEvent>? eventSub;
   StreamSubscription<String>? logSub;
 
+  /// 화면에 표시할 모델과 강도
+  String get modelLabel =>
+      effort == ReasoningEffort.auto ? model : '$model · ${effort.label}';
+
   String get effectiveDirectory => isolatedWorktreePath ?? workingDirectory;
 }
 
@@ -231,7 +235,8 @@ class SessionManager extends ChangeNotifier {
   }) {
     _counter++;
     final id = sessionId ?? 'session_$_counter';
-    final selectedModel = model ?? backendType.defaultModel;
+    final requestedModel = model ?? backendType.defaultModel;
+    final selectedModel = backendType.baseModel(requestedModel);
     final workDir = workingDirectory ?? Directory.current.path;
     final backend = backendOverride ?? _registry.create(backendType);
 
@@ -241,7 +246,7 @@ class SessionManager extends ChangeNotifier {
       title: title ?? '작업 #$_counter (${backendType.displayName})',
       backendType: backendType,
       model: selectedModel,
-      effort: effort,
+      effort: backendType.resolveEffort(effort, requestedModel),
       workingDirectory: workDir,
       backend: backend,
       hasDirectoryConflict: conflicts.isNotEmpty,
@@ -672,7 +677,7 @@ class SessionManager extends ChangeNotifier {
         title: subTask.title,
         backendType: subTask.targetBackend,
         model: subTask.targetModel,
-        effort: masterSession.effort,
+        effort: _inheritedEffort(masterSession, subTask.targetBackend),
         workingDirectory: masterSession.workingDirectory,
         makeActive: i == 0,
       );
@@ -686,6 +691,10 @@ class SessionManager extends ChangeNotifier {
 
     return plan;
   }
+
+  /// 같은 백엔드에서만 강도를 이어받습니다. 다른 백엔드의 비용을 임의로 올리지 않기 위함입니다.
+  ReasoningEffort _inheritedEffort(ManagedSession source, BackendType target) =>
+      source.backendType == target ? source.effort : target.defaultEffort;
 
   /// 스킬 관리 화면에서 특정 스킬을 지정하여 즉시 호출합니다.
   Future<void> invokeSkill(
@@ -769,7 +778,7 @@ class SessionManager extends ChangeNotifier {
       title: '${source.title} (${targetBackend.displayName})',
       backendType: targetBackend,
       model: targetModel ?? targetBackend.defaultModel,
-      effort: source.effort,
+      effort: _inheritedEffort(source, targetBackend),
       workingDirectory: source.workingDirectory,
       makeActive: true,
     );
@@ -794,7 +803,12 @@ class SessionManager extends ChangeNotifier {
     if (session == null) return;
     session.conversationIdToResume = null;
     session.backendType = backendType;
-    session.model = model ?? backendType.defaultModel;
+    final requestedModel = model ?? backendType.defaultModel;
+    session.model = backendType.baseModel(requestedModel);
+    session.effort = backendType.resolveEffort(
+      backendType.defaultEffort,
+      requestedModel,
+    );
     if (replaceAdapter) {
       session.eventSub?.cancel();
       session.logSub?.cancel();
@@ -815,16 +829,22 @@ class SessionManager extends ChangeNotifier {
 
   void updateSessionModel(String sessionId, String model) {
     final session = _sessions[sessionId];
-    if (session == null || session.model == model) return;
+    if (session == null) return;
+    final base = session.backendType.baseModel(model);
+    if (session.model == base) return;
     session.conversationIdToResume ??= session.backend.remoteConversationId;
     session.isStarted = false;
-    session.model = model;
+    session.model = base;
     notifyListeners();
   }
 
   void updateSessionEffort(String sessionId, ReasoningEffort effort) {
     final session = _sessions[sessionId];
-    if (session == null || session.effort == effort) return;
+    if (session == null ||
+        session.effort == effort ||
+        !session.backendType.supportedEfforts.contains(effort)) {
+      return;
+    }
     session.conversationIdToResume ??= session.backend.remoteConversationId;
     session.isStarted = false;
     session.effort = effort;

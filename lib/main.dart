@@ -653,7 +653,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   ),
                   BackendModelBadge(
                     backend: backend,
-                    model: active?.model ?? backend.defaultModel,
+                    model: active?.modelLabel ?? backend.defaultModel,
                   ),
                 ],
               ),

@@ -172,21 +172,27 @@ class _ModelDropdown extends StatelessWidget {
 }
 
 class _EffortDropdown extends StatelessWidget {
-  const _EffortDropdown({required this.value, required this.onChanged});
+  const _EffortDropdown({
+    required this.backend,
+    required this.value,
+    required this.onChanged,
+  });
 
+  final BackendType backend;
   final ReasoningEffort value;
   final ValueChanged<ReasoningEffort>? onChanged;
 
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<ReasoningEffort>(
-      key: const ValueKey('session_effort'),
+      // 백엔드마다 선택지가 달라 새로 초기화합니다.
+      key: ValueKey('session_effort_${backend.id}'),
       initialValue: value,
       isDense: true,
       borderRadius: BorderRadius.circular(8),
       decoration: const InputDecoration(labelText: '추론 강도'),
       items: [
-        for (final effort in ReasoningEffort.values)
+        for (final effort in backend.supportedEfforts)
           DropdownMenuItem(
             value: effort,
             child: Text(effort.label, style: const TextStyle(fontSize: 13)),
@@ -225,10 +231,16 @@ class NewSessionDialog extends StatefulWidget {
 class _NewSessionDialogState extends State<NewSessionDialog> {
   late final _folderCtrl = TextEditingController(text: widget.initialFolder);
   late BackendType _backend = widget.initialBackend;
-  late String _model = _backend.availableModels.contains(widget.initialModel)
-      ? widget.initialModel!
+  late String _model =
+      _backend.availableModels.contains(
+        _backend.baseModel(widget.initialModel ?? ''),
+      )
+      ? _backend.baseModel(widget.initialModel!)
       : _backend.defaultModel;
-  late ReasoningEffort _effort = widget.initialEffort;
+  late ReasoningEffort _effort = _backend.resolveEffort(
+    widget.initialEffort,
+    widget.initialModel ?? _backend.defaultModel,
+  );
   String? _error;
 
   @override
@@ -276,6 +288,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
               onChanged: (b) => setState(() {
                 _backend = b;
                 _model = b.defaultModel;
+                _effort = b.defaultEffort;
               }),
             ),
             const SizedBox(height: 12),
@@ -286,6 +299,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             ),
             const SizedBox(height: 12),
             _EffortDropdown(
+              backend: _backend,
               value: _effort,
               onChanged: (e) => setState(() => _effort = e),
             ),
@@ -345,11 +359,16 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
   );
   late BackendType _backend = widget.session.backendType;
   late final String _initialModel =
-      _backend.availableModels.contains(widget.session.model)
-      ? widget.session.model
+      _backend.availableModels.contains(
+        _backend.baseModel(widget.session.model),
+      )
+      ? _backend.baseModel(widget.session.model)
       : _backend.defaultModel;
   late String _model = _initialModel;
-  late ReasoningEffort _effort = widget.session.effort;
+  late ReasoningEffort _effort = _backend.resolveEffort(
+    widget.session.effort,
+    widget.session.model,
+  );
   late bool _trusted =
       widget.trustedFolders?.isTrusted(widget.session.workingDirectory) ??
       false;
@@ -429,6 +448,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
                   : (b) => setState(() {
                       _backend = b;
                       _model = b.defaultModel;
+                      _effort = b.defaultEffort;
                     }),
             ),
             const SizedBox(height: 12),
@@ -439,6 +459,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
             ),
             const SizedBox(height: 12),
             _EffortDropdown(
+              backend: _backend,
               value: _effort,
               onChanged: _isBusy ? null : (e) => setState(() => _effort = e),
             ),

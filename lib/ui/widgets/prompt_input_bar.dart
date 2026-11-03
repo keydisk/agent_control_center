@@ -108,6 +108,11 @@ class _PromptInputBarState extends State<PromptInputBar> {
   /// 자동완성 목록이 열려 있을 때 ↑/↓로 이동하고 Tab/Enter로 완성합니다.
   KeyEventResult _onPromptKeyEvent(FocusNode node, KeyEvent event) {
     if (event is KeyUpEvent) return KeyEventResult.ignored;
+    if (event is KeyDownEvent && _isSendShortcut(event.logicalKey)) {
+      // 실행 중에는 입력을 지우지 않습니다. 전송 버튼도 이때는 중지 버튼입니다.
+      if (!_isInterruptible) _handleSend();
+      return KeyEventResult.handled;
+    }
     final suggestions = _slashSuggestions;
     if (suggestions.isEmpty) return KeyEventResult.ignored;
 
@@ -210,6 +215,21 @@ class _PromptInputBarState extends State<PromptInputBar> {
       },
     );
   }
+
+  bool get _isInterruptible => widget.isBusy && widget.onInterrupt != null;
+
+  bool _isSendShortcut(LogicalKeyboardKey key) {
+    if (key != LogicalKeyboardKey.enter &&
+        key != LogicalKeyboardKey.numpadEnter) {
+      return false;
+    }
+    final keyboard = HardwareKeyboard.instance;
+    return Platform.isMacOS
+        ? keyboard.isMetaPressed
+        : keyboard.isControlPressed;
+  }
+
+  String get _sendShortcutLabel => Platform.isMacOS ? '⌘↩' : 'Ctrl+Enter';
 
   void _handleSend() {
     final text = _controller.text.trim();
@@ -366,7 +386,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
                     maxLines: 6,
                     decoration: InputDecoration(
                       hintText:
-                          '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령·스킬 자동완성)',
+                          '에이전트에게 작업을 지시하세요... ("/" 자동완성 · $_sendShortcutLabel 전송)',
                       filled: false,
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
@@ -465,20 +485,23 @@ class _PromptInputBarState extends State<PromptInputBar> {
         DropdownButtonHideUnderline(
           child: DropdownButton<ReasoningEffort>(
             key: const ValueKey('effort_dropdown'),
-            value: widget.selectedEffort,
+            value: widget.selectedBackend.resolveEffort(
+              widget.selectedEffort,
+              widget.selectedModel,
+            ),
             isDense: true,
             iconSize: 14,
             focusColor: Colors.transparent,
             borderRadius: BorderRadius.circular(8),
             selectedItemBuilder: (context) => [
-              for (final effort in ReasoningEffort.values)
+              for (final effort in widget.selectedBackend.supportedEfforts)
                 Text(
                   '추론 ${effort.label}',
                   style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
                 ),
             ],
             items: [
-              for (final effort in ReasoningEffort.values)
+              for (final effort in widget.selectedBackend.supportedEfforts)
                 DropdownMenuItem(
                   value: effort,
                   child: Text(
@@ -519,10 +542,10 @@ class _PromptInputBarState extends State<PromptInputBar> {
   }
 
   Widget _buildSendButton(MacColors mac) {
-    final interrupting = widget.isBusy && widget.onInterrupt != null;
+    final interrupting = _isInterruptible;
     return IconButton(
       key: ValueKey(interrupting ? 'interrupt_button' : 'send_button'),
-      tooltip: interrupting ? '중지' : '전송',
+      tooltip: interrupting ? '중지' : '전송 ($_sendShortcutLabel)',
       onPressed: interrupting ? widget.onInterrupt : _handleSend,
       style: IconButton.styleFrom(
         backgroundColor: interrupting
