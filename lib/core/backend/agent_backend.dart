@@ -10,6 +10,7 @@ class AgentSessionConfig {
     required this.backendType,
     required this.workingDirectory,
     this.model = '',
+    this.effort = ReasoningEffort.auto,
     this.conversationId,
     this.extraArgs = const [],
     this.environment = const {},
@@ -21,6 +22,7 @@ class AgentSessionConfig {
   final BackendType backendType;
   final String workingDirectory;
   final String model;
+  final ReasoningEffort effort;
   final String? conversationId;
   final List<String> extraArgs;
   final Map<String, String> environment;

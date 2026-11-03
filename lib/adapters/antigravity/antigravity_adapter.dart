@@ -74,6 +74,10 @@ class AntigravityAdapter implements AgentBackend {
       '--output-format',
       'stream-json',
       if (config.model.isNotEmpty) ...['--model', config.model],
+      if (config.effort != ReasoningEffort.auto) ...[
+        '--effort',
+        config.effort.name,
+      ],
       if (config.conversationId != null &&
           config.conversationId!.isNotEmpty) ...[
         '--conversation',

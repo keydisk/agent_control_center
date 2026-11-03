@@ -245,6 +245,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       context: context,
       builder: (ctx) => NewSessionDialog(
         initialBackend: source?.backendType ?? BackendType.antigravity,
+        initialModel: source?.model,
+        initialEffort: source?.effort ?? ReasoningEffort.auto,
         initialFolder: source?.workingDirectory ?? Directory.current.path,
         trustedFolders: _sessionManager.trustedFolders,
       ),
@@ -252,6 +254,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     if (request == null) return;
     _sessionManager.createSession(
       backendType: request.backend,
+      model: request.model,
+      effort: request.effort,
       workingDirectory: request.folder,
     );
   }
@@ -282,6 +286,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     } else if (result.model != null) {
       _sessionManager.updateSessionModel(sessionId, result.model!);
     }
+    _sessionManager.updateSessionEffort(sessionId, result.effort);
     if (result.folder != session.workingDirectory) {
       _sessionManager.updateSessionWorkingDirectory(sessionId, result.folder);
     }
@@ -565,6 +570,15 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                           active.sessionId,
                           b,
                           replaceAdapter: widget.backendOverride == null,
+                        );
+                      }
+                    },
+                    selectedEffort: active?.effort ?? ReasoningEffort.auto,
+                    onEffortChanged: (effort) {
+                      if (active != null) {
+                        _sessionManager.updateSessionEffort(
+                          active.sessionId,
+                          effort,
                         );
                       }
                     },

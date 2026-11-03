@@ -134,6 +134,10 @@ class CodexAdapter implements AgentBackend {
       cfg.workingDirectory,
       '-m',
       cfg.effectiveModel,
+      if (cfg.effort != ReasoningEffort.auto) ...[
+        '-c',
+        'model_reasoning_effort="${cfg.effort.name}"',
+      ],
       if (cfg.autoApproveBypassEnabled)
         '--dangerously-bypass-approvals-and-sandbox'
       else ...[

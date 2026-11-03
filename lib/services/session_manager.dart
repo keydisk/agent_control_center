@@ -69,6 +69,7 @@ class ManagedSession {
     required this.model,
     required this.workingDirectory,
     required this.backend,
+    this.effort = ReasoningEffort.auto,
     this.status = SessionStatus.idle,
     this.isStarted = false,
     this.hasDirectoryConflict = false,
@@ -85,6 +86,7 @@ class ManagedSession {
   String title;
   BackendType backendType;
   String model;
+  ReasoningEffort effort;
   String workingDirectory;
   AgentBackend backend;
   SessionStatus status;
@@ -220,6 +222,7 @@ class SessionManager extends ChangeNotifier {
     String? title,
     BackendType backendType = BackendType.antigravity,
     String? model,
+    ReasoningEffort effort = ReasoningEffort.auto,
     String? workingDirectory,
     AgentBackend? backendOverride,
     List<AgentEvent>? initialEvents,
@@ -238,6 +241,7 @@ class SessionManager extends ChangeNotifier {
       title: title ?? '작업 #$_counter (${backendType.displayName})',
       backendType: backendType,
       model: selectedModel,
+      effort: effort,
       workingDirectory: workDir,
       backend: backend,
       hasDirectoryConflict: conflicts.isNotEmpty,
@@ -582,6 +586,7 @@ class SessionManager extends ChangeNotifier {
             backendType: session.backendType,
             workingDirectory: session.effectiveDirectory,
             model: session.model,
+            effort: session.effort,
             conversationId: session.conversationIdToResume,
             systemPromptAppend: _skillRegistry.buildRoutingInstructionForPrompt(
               prompt,
@@ -667,6 +672,7 @@ class SessionManager extends ChangeNotifier {
         title: subTask.title,
         backendType: subTask.targetBackend,
         model: subTask.targetModel,
+        effort: masterSession.effort,
         workingDirectory: masterSession.workingDirectory,
         makeActive: i == 0,
       );
@@ -763,6 +769,7 @@ class SessionManager extends ChangeNotifier {
       title: '${source.title} (${targetBackend.displayName})',
       backendType: targetBackend,
       model: targetModel ?? targetBackend.defaultModel,
+      effort: source.effort,
       workingDirectory: source.workingDirectory,
       makeActive: true,
     );
@@ -812,6 +819,15 @@ class SessionManager extends ChangeNotifier {
     session.conversationIdToResume ??= session.backend.remoteConversationId;
     session.isStarted = false;
     session.model = model;
+    notifyListeners();
+  }
+
+  void updateSessionEffort(String sessionId, ReasoningEffort effort) {
+    final session = _sessions[sessionId];
+    if (session == null || session.effort == effort) return;
+    session.conversationIdToResume ??= session.backend.remoteConversationId;
+    session.isStarted = false;
+    session.effort = effort;
     notifyListeners();
   }
 

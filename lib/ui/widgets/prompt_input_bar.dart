@@ -21,6 +21,8 @@ class PromptInputBar extends StatefulWidget {
     required this.onModelChanged,
     required this.onWorkingDirectoryChanged,
     required this.onSubmit,
+    this.selectedEffort = ReasoningEffort.auto,
+    this.onEffortChanged,
     this.selectedDevice = TargetDeviceType.macosDesktop,
     this.onDeviceChanged,
     this.isBusy = false,
@@ -33,6 +35,8 @@ class PromptInputBar extends StatefulWidget {
   final String workingDirectory;
   final ValueChanged<BackendType> onBackendChanged;
   final ValueChanged<String> onModelChanged;
+  final ReasoningEffort selectedEffort;
+  final ValueChanged<ReasoningEffort>? onEffortChanged;
   final ValueChanged<String> onWorkingDirectoryChanged;
   final void Function(String prompt, List<String> attachments) onSubmit;
   final TargetDeviceType selectedDevice;
@@ -454,6 +458,38 @@ class _PromptInputBarState extends State<PromptInputBar> {
             onChanged: (val) {
               if (val != null) {
                 widget.onModelChanged(val);
+              }
+            },
+          ),
+        ),
+        DropdownButtonHideUnderline(
+          child: DropdownButton<ReasoningEffort>(
+            key: const ValueKey('effort_dropdown'),
+            value: widget.selectedEffort,
+            isDense: true,
+            iconSize: 14,
+            focusColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            selectedItemBuilder: (context) => [
+              for (final effort in ReasoningEffort.values)
+                Text(
+                  '추론 ${effort.label}',
+                  style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
+                ),
+            ],
+            items: [
+              for (final effort in ReasoningEffort.values)
+                DropdownMenuItem(
+                  value: effort,
+                  child: Text(
+                    effort.label,
+                    style: TextStyle(fontSize: 12, color: mac.label),
+                  ),
+                ),
+            ],
+            onChanged: (val) {
+              if (val != null) {
+                widget.onEffortChanged?.call(val);
               }
             },
           ),

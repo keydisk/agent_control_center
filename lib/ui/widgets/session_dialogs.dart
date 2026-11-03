@@ -16,9 +16,16 @@ Future<String?> pickFolderInFinder(String prompt) async {
 }
 
 class NewSessionRequest {
-  const NewSessionRequest({required this.backend, required this.folder});
+  const NewSessionRequest({
+    required this.backend,
+    required this.model,
+    required this.effort,
+    required this.folder,
+  });
 
   final BackendType backend;
+  final String model;
+  final ReasoningEffort effort;
   final String folder;
 }
 
@@ -26,6 +33,7 @@ class SessionSettingsResult {
   const SessionSettingsResult({
     required this.title,
     required this.backend,
+    required this.effort,
     required this.folder,
     this.model,
   });
@@ -35,6 +43,7 @@ class SessionSettingsResult {
 
   /// 사용자가 바꾸지 않았으면 null입니다.
   final String? model;
+  final ReasoningEffort effort;
   final String folder;
 }
 
@@ -126,16 +135,86 @@ class _BackendDropdown extends StatelessWidget {
   }
 }
 
+class _ModelDropdown extends StatelessWidget {
+  const _ModelDropdown({
+    required this.backend,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final BackendType backend;
+  final String value;
+  final ValueChanged<String>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<String>(
+      // 백엔드가 바뀌면 목록과 선택값을 새로 초기화합니다.
+      key: ValueKey('session_model_${backend.id}'),
+      initialValue: value,
+      isDense: true,
+      borderRadius: BorderRadius.circular(8),
+      decoration: const InputDecoration(labelText: '모델'),
+      items: [
+        for (final m in backend.availableModels)
+          DropdownMenuItem(
+            value: m,
+            child: Text(m, style: const TextStyle(fontSize: 13)),
+          ),
+      ],
+      onChanged: onChanged == null
+          ? null
+          : (m) {
+              if (m != null) onChanged!(m);
+            },
+    );
+  }
+}
+
+class _EffortDropdown extends StatelessWidget {
+  const _EffortDropdown({required this.value, required this.onChanged});
+
+  final ReasoningEffort value;
+  final ValueChanged<ReasoningEffort>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return DropdownButtonFormField<ReasoningEffort>(
+      key: const ValueKey('session_effort'),
+      initialValue: value,
+      isDense: true,
+      borderRadius: BorderRadius.circular(8),
+      decoration: const InputDecoration(labelText: '추론 강도'),
+      items: [
+        for (final effort in ReasoningEffort.values)
+          DropdownMenuItem(
+            value: effort,
+            child: Text(effort.label, style: const TextStyle(fontSize: 13)),
+          ),
+      ],
+      onChanged: onChanged == null
+          ? null
+          : (e) {
+              if (e != null) onChanged!(e);
+            },
+    );
+  }
+}
+
 /// 백엔드와 작업 폴더를 지정해 세션을 만듭니다. 지정한 폴더는 신뢰 목록에 추가됩니다.
 class NewSessionDialog extends StatefulWidget {
   const NewSessionDialog({
     super.key,
     required this.initialBackend,
     required this.initialFolder,
+    this.initialModel,
+    this.initialEffort = ReasoningEffort.auto,
     this.trustedFolders,
   });
 
   final BackendType initialBackend;
+  final String? initialModel;
+  final ReasoningEffort initialEffort;
   final String initialFolder;
   final TrustedFolderStore? trustedFolders;
 
@@ -146,6 +225,10 @@ class NewSessionDialog extends StatefulWidget {
 class _NewSessionDialogState extends State<NewSessionDialog> {
   late final _folderCtrl = TextEditingController(text: widget.initialFolder);
   late BackendType _backend = widget.initialBackend;
+  late String _model = _backend.availableModels.contains(widget.initialModel)
+      ? widget.initialModel!
+      : _backend.defaultModel;
+  late ReasoningEffort _effort = widget.initialEffort;
   String? _error;
 
   @override
@@ -166,8 +249,14 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
       setState(() => _error = e.message);
       return;
     }
-    Navigator.of(context)
-        .pop(NewSessionRequest(backend: _backend, folder: folder));
+    Navigator.of(context).pop(
+      NewSessionRequest(
+        backend: _backend,
+        model: _model,
+        effort: _effort,
+        folder: folder,
+      ),
+    );
   }
 
   @override
@@ -184,7 +273,21 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             _BackendDropdown(
               dropdownKey: const ValueKey('new_session_backend'),
               value: _backend,
-              onChanged: (b) => setState(() => _backend = b),
+              onChanged: (b) => setState(() {
+                _backend = b;
+                _model = b.defaultModel;
+              }),
+            ),
+            const SizedBox(height: 12),
+            _ModelDropdown(
+              backend: _backend,
+              value: _model,
+              onChanged: (m) => setState(() => _model = m),
+            ),
+            const SizedBox(height: 12),
+            _EffortDropdown(
+              value: _effort,
+              onChanged: (e) => setState(() => _effort = e),
             ),
             const SizedBox(height: 12),
             _FolderField(
@@ -246,6 +349,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
       ? widget.session.model
       : _backend.defaultModel;
   late String _model = _initialModel;
+  late ReasoningEffort _effort = widget.session.effort;
   late bool _trusted =
       widget.trustedFolders?.isTrusted(widget.session.workingDirectory) ??
       false;
@@ -294,6 +398,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
         model: _backend != widget.session.backendType || _model != _initialModel
             ? _model
             : null,
+        effort: _effort,
         folder: folder,
       ),
     );
@@ -327,24 +432,15 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
                     }),
             ),
             const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              key: ValueKey('session_settings_model_${_backend.id}'),
-              initialValue: _model,
-              isDense: true,
-              borderRadius: BorderRadius.circular(8),
-              decoration: const InputDecoration(labelText: '모델'),
-              items: [
-                for (final m in _backend.availableModels)
-                  DropdownMenuItem(
-                    value: m,
-                    child: Text(m, style: const TextStyle(fontSize: 13)),
-                  ),
-              ],
-              onChanged: _isBusy
-                  ? null
-                  : (m) {
-                      if (m != null) setState(() => _model = m);
-                    },
+            _ModelDropdown(
+              backend: _backend,
+              value: _model,
+              onChanged: _isBusy ? null : (m) => setState(() => _model = m),
+            ),
+            const SizedBox(height: 12),
+            _EffortDropdown(
+              value: _effort,
+              onChanged: _isBusy ? null : (e) => setState(() => _effort = e),
             ),
             const SizedBox(height: 12),
             _FolderField(
