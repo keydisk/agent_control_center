@@ -23,10 +23,13 @@ class NewSessionRequest {
     required this.model,
     required this.effort,
     required this.folder,
+    this.title,
     this.instructions = '',
     this.continueFrom,
   });
 
+  /// 비어 있으면 첫 대화를 보고 이름을 짓습니다.
+  final String? title;
   final BackendType backend;
   final String model;
   final ReasoningEffort effort;
@@ -288,6 +291,7 @@ class NewSessionDialog extends StatefulWidget {
 }
 
 class _NewSessionDialogState extends State<NewSessionDialog> {
+  final _nameCtrl = TextEditingController();
   late final _folderCtrl = TextEditingController(text: widget.initialFolder);
   late final _instructionsCtrl = TextEditingController(
     text: widget.initialInstructions,
@@ -308,6 +312,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
 
   @override
   void dispose() {
+    _nameCtrl.dispose();
     _folderCtrl.dispose();
     _instructionsCtrl.dispose();
     super.dispose();
@@ -326,8 +331,10 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
       setState(() => _error = e.message);
       return;
     }
+    final name = _nameCtrl.text.trim();
     Navigator.of(context).pop(
       NewSessionRequest(
+        title: name.isEmpty ? null : name,
         backend: _backend,
         model: _model,
         effort: _effort,
@@ -342,6 +349,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       key: const ValueKey('new_session_dialog'),
+      scrollable: true,
       title: Text(widget.title),
       content: SizedBox(
         width: 460,
@@ -349,6 +357,15 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            TextField(
+              key: const ValueKey('new_session_title'),
+              controller: _nameCtrl,
+              decoration: const InputDecoration(
+                labelText: '세션 이름 (선택)',
+                helperText: '비워 두면 첫 대화를 보고 자동으로 정합니다.',
+              ),
+            ),
+            const SizedBox(height: 12),
             _BackendDropdown(
               dropdownKey: const ValueKey('new_session_backend'),
               value: _backend,

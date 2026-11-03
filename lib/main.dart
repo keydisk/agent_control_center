@@ -128,7 +128,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         trustedFolders: guarded ? TrustedFolderStore.load() : null,
         effortPreferences: guarded ? EffortPreferenceStore.load() : null,
         groups: guarded ? WorkspaceGroupStore.load() : null,
-        useAgentCompression: guarded,
+        useHelperAgent: guarded,
         autoIsolateWithWorktree: guarded,
         onFolderTrustRequired: _confirmFolderTrust,
         onApprovalRequired: (session, req) {
@@ -202,7 +202,6 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     if (_sessionManager.sessions.isEmpty) {
       _sessionManager.createSession(
         sessionId: 'session_1',
-        title: '작업 #1 (${BackendType.antigravity.displayName})',
         backendType: BackendType.antigravity,
         workingDirectory: Directory.current.path,
         backendOverride: widget.backendOverride,
@@ -343,6 +342,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   void _createSessionFrom(NewSessionRequest request, {String? groupId}) {
     _sessionManager.effortPreferences?.remember(request.backend, request.effort);
     final session = _sessionManager.createSession(
+      title: request.title,
       backendType: request.backend,
       model: request.model,
       effort: request.effort,
@@ -379,6 +379,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     _sessionManager.effortPreferences?.remember(request.backend, request.effort);
     _sessionManager.createChildSession(
       parentSessionId,
+      title: request.title,
       backendType: request.backend,
       model: request.model,
       effort: request.effort,
