@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../theme/mac_theme.dart';
+import 'session_dialogs.dart';
 
 import 'package:flutter/services.dart';
 
@@ -276,12 +277,9 @@ class _PromptInputBarState extends State<PromptInputBar> {
           if (Platform.isMacOS)
             TextButton(
               onPressed: () async {
-                final res = await Process.run('osascript', [
-                  '-e',
-                  'POSIX path of (choose folder with prompt "작업 폴더를 선택하세요")',
-                ]);
-                if (res.exitCode == 0) {
-                  dirCtrl.text = res.stdout.toString().trim();
+                final picked = await pickFolderInFinder('작업 폴더를 선택하세요');
+                if (picked != null) {
+                  dirCtrl.text = picked;
                 }
               },
               child: const Text('Finder에서 선택'),

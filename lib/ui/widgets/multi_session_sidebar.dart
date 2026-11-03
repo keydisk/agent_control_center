@@ -14,7 +14,7 @@ class MultiSessionSidebar extends StatelessWidget {
     required this.activeSessionId,
     required this.usageByBackend,
     required this.onSelectSession,
-    required this.onCreateSession,
+    required this.onNewSession,
     required this.onStopSession,
     required this.onRetrySession,
     required this.onRerunWithBackend,
@@ -26,13 +26,17 @@ class MultiSessionSidebar extends StatelessWidget {
     this.trustedFolderCount,
     this.onManageTrustedFolders,
     this.onMergeWorktree,
+    this.onSessionSettings,
+    this.onDeleteSession,
   });
 
   final List<ManagedSession> sessions;
   final String? activeSessionId;
   final Map<BackendType, TokenUsage> usageByBackend;
   final ValueChanged<String> onSelectSession;
-  final ValueChanged<BackendType> onCreateSession;
+
+  /// 메뉴를 연 세션의 설정을 기본값으로 쓰며, 상단 버튼은 null을 전달합니다.
+  final ValueChanged<String?> onNewSession;
   final ValueChanged<String> onStopSession;
   final ValueChanged<String> onRetrySession;
   final void Function(String sessionId, BackendType backend) onRerunWithBackend;
@@ -44,6 +48,8 @@ class MultiSessionSidebar extends StatelessWidget {
   final int? trustedFolderCount;
   final VoidCallback? onManageTrustedFolders;
   final ValueChanged<String>? onMergeWorktree;
+  final ValueChanged<String>? onSessionSettings;
+  final ValueChanged<String>? onDeleteSession;
 
   @override
   Widget build(BuildContext context) {
@@ -63,27 +69,11 @@ class MultiSessionSidebar extends StatelessWidget {
                 alignment: Alignment.centerRight,
                 child: Padding(
                   padding: const EdgeInsets.only(right: 10),
-                  child: PopupMenuButton<BackendType>(
-                    key: const ValueKey('new_session_menu_button'),
-                    tooltip: '새 작업 세션 추가',
-                    onSelected: onCreateSession,
-                    itemBuilder: (context) => [
-                      for (final b in BackendType.values)
-                        PopupMenuItem(
-                          key: ValueKey('new_session_${b.id}'),
-                          value: b,
-                          height: 28,
-                          child: Text('${b.displayName} 세션'),
-                        ),
-                    ],
-                    child: Padding(
-                      padding: const EdgeInsets.all(5),
-                      child: Icon(
-                        Icons.edit_square,
-                        size: 16,
-                        color: mac.secondaryLabel,
-                      ),
-                    ),
+                  child: IconButton(
+                    key: const ValueKey('new_session_button'),
+                    tooltip: '새 세션',
+                    onPressed: () => onNewSession(null),
+                    icon: const Icon(Icons.edit_square),
                   ),
                 ),
               ),
@@ -105,6 +95,9 @@ class MultiSessionSidebar extends StatelessWidget {
                   onRerun: (b) => onRerunWithBackend(session.sessionId, b),
                   onIsolate: () => onIsolateWorktree(session.sessionId),
                   onMerge: () => onMergeWorktree?.call(session.sessionId),
+                  onNewSession: () => onNewSession(session.sessionId),
+                  onSettings: () => onSessionSettings?.call(session.sessionId),
+                  onDelete: () => onDeleteSession?.call(session.sessionId),
                 );
               },
             ),
@@ -261,6 +254,9 @@ class _SessionRow extends StatelessWidget {
     required this.onRerun,
     required this.onIsolate,
     required this.onMerge,
+    required this.onNewSession,
+    required this.onSettings,
+    required this.onDelete,
   });
 
   final ManagedSession session;
@@ -271,6 +267,43 @@ class _SessionRow extends StatelessWidget {
   final ValueChanged<BackendType> onRerun;
   final VoidCallback onIsolate;
   final VoidCallback onMerge;
+  final VoidCallback onNewSession;
+  final VoidCallback onSettings;
+  final VoidCallback onDelete;
+
+  Future<void> _showContextMenu(BuildContext context, Offset position) async {
+    final mac = context.mac;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final action = await showMenu<VoidCallback>(
+      context: context,
+      position: RelativeRect.fromRect(
+        position & Size.zero,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(
+          key: const ValueKey('session_menu_new'),
+          height: 28,
+          value: onNewSession,
+          child: const Text('새 세션'),
+        ),
+        PopupMenuItem(
+          key: const ValueKey('session_menu_settings'),
+          height: 28,
+          value: onSettings,
+          child: const Text('환경 설정'),
+        ),
+        const PopupMenuDivider(height: 8),
+        PopupMenuItem(
+          key: const ValueKey('session_menu_delete'),
+          height: 28,
+          value: onDelete,
+          child: Text('삭제', style: TextStyle(color: mac.red)),
+        ),
+      ],
+    );
+    action?.call();
+  }
 
   Color _statusColor(MacColors mac) {
     switch (session.status) {
@@ -299,89 +332,96 @@ class _SessionRow extends StatelessWidget {
     return Padding(
       key: ValueKey('session_card_${session.sessionId}'),
       padding: const EdgeInsets.only(bottom: 2),
-      child: Material(
-        color: isSelected ? mac.selection : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        child: InkWell(
+      child: GestureDetector(
+        onSecondaryTapDown: (details) =>
+            _showContextMenu(context, details.globalPosition),
+        child: Material(
+          color: isSelected ? mac.selection : Colors.transparent,
           borderRadius: BorderRadius.circular(6),
-          onTap: onSelect,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: statusColor,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        session.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: mac.label,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(6),
+            onTap: onSelect,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          color: statusColor,
+                          shape: BoxShape.circle,
                         ),
                       ),
+                      const SizedBox(width: 7),
+                      Expanded(
+                        child: Text(
+                          session.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: mac.label,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        session.status.label,
+                        key: ValueKey('session_status_${session.sessionId}'),
+                        style: TextStyle(
+                          fontSize: 10.5,
+                          color: mac.secondaryLabel,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 3),
+                  Padding(
+                    padding: const EdgeInsets.only(left: 14),
+                    child: BackendModelBadge(
+                      backend: session.backendType,
+                      model: session.model,
                     ),
-                    const SizedBox(width: 6),
+                  ),
+                  if (isSelected || isBusy)
+                    _SessionActions(
+                      session: session,
+                      isBusy: isBusy,
+                      onStop: onStop,
+                      onRetry: onRetry,
+                      onRerun: onRerun,
+                    ),
+                  if (session.hasDirectoryConflict)
+                    _ConflictNotice(session: session, onIsolate: onIsolate),
+                  for (final link in session.worktreeLinks) ...[
+                    const SizedBox(height: 6),
+                    _WorktreeLinkView(
+                      link: link,
+                      onMerge: identical(link, session.activeWorktreeLink)
+                          ? onMerge
+                          : null,
+                    ),
+                  ],
+                  if (session.isolatedWorktreePath != null &&
+                      session.worktreeLinks.isEmpty) ...[
+                    const SizedBox(height: 4),
                     Text(
-                      session.status.label,
-                      key: ValueKey('session_status_${session.sessionId}'),
+                      '격리 Worktree: ${session.isolatedWorktreePath}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         fontSize: 10.5,
                         color: mac.secondaryLabel,
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 3),
-                Padding(
-                  padding: const EdgeInsets.only(left: 14),
-                  child: BackendModelBadge(
-                    backend: session.backendType,
-                    model: session.model,
-                  ),
-                ),
-                if (isSelected || isBusy)
-                  _SessionActions(
-                    session: session,
-                    isBusy: isBusy,
-                    onStop: onStop,
-                    onRetry: onRetry,
-                    onRerun: onRerun,
-                  ),
-                if (session.hasDirectoryConflict)
-                  _ConflictNotice(session: session, onIsolate: onIsolate),
-                for (final link in session.worktreeLinks) ...[
-                  const SizedBox(height: 6),
-                  _WorktreeLinkView(
-                    link: link,
-                    onMerge: identical(link, session.activeWorktreeLink)
-                        ? onMerge
-                        : null,
-                  ),
                 ],
-                if (session.isolatedWorktreePath != null &&
-                    session.worktreeLinks.isEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    '격리 Worktree: ${session.isolatedWorktreePath}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 10.5, color: mac.secondaryLabel),
-                  ),
-                ],
-              ],
+              ),
             ),
           ),
         ),

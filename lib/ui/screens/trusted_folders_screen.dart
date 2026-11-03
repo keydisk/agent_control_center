@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../services/trusted_folder_store.dart';
+import '../widgets/session_dialogs.dart';
 
 /// 에이전트 실행을 허용할 폴더를 추가·해제하는 다이얼로그
 class TrustedFoldersDialog extends StatefulWidget {
@@ -39,12 +40,9 @@ class _TrustedFoldersDialogState extends State<TrustedFoldersDialog> {
   }
 
   Future<void> _pickFromFinder() async {
-    final res = await Process.run('osascript', [
-      '-e',
-      'POSIX path of (choose folder with prompt "신뢰할 폴더를 선택하세요")',
-    ]);
-    if (res.exitCode == 0) {
-      _pathCtrl.text = res.stdout.toString().trim();
+    final picked = await pickFolderInFinder('신뢰할 폴더를 선택하세요');
+    if (picked != null) {
+      _pathCtrl.text = picked;
     }
   }
 
