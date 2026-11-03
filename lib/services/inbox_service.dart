@@ -184,10 +184,35 @@ class InboxService extends ChangeNotifier {
     this.customSummarizer,
     this.defaultSlackChannelId = 'C01GENERAL',
     this.customIMessageDbPath,
+    this._stateFile,
   }) : _notificationService =
            notificationService ?? NotificationService(enableOsPlugin: false),
        _spawner = spawner ?? const IoProcessSpawner(),
-       _httpClient = httpClient ?? http.Client();
+       _httpClient = httpClient ?? http.Client() {
+    _loadState();
+  }
+
+  /// 앱을 다시 켜도 같은 메일·메시지를 또 알리지 않도록 감지 위치를 보관할 기본 파일
+  static File? defaultStateFile() {
+    final home = Platform.environment['HOME'];
+    return home == null
+        ? null
+        : File('$home/.agent_control_center/inbox_state.json');
+  }
+
+  static const _mailNotRunning = 'ACC_MAIL_NOT_RUNNING';
+  static const _maxNewPerScan = 20;
+
+  final File? _stateFile;
+  int? _lastIMessageRowId;
+  Set<int>? _seenMailIds;
+  bool _mailFetching = false;
+  bool _imessageFetching = false;
+  final Map<InboxSourceType, String> _sourceErrors = {};
+
+  /// macOS 권한 부족처럼 사용자가 해결해야 하는 로컬 소스 오류
+  Map<InboxSourceType, String> get sourceErrors =>
+      Map.unmodifiable(_sourceErrors);
 
   final NotificationService _notificationService;
   final PermissionCenter? permissionCenter;
@@ -280,6 +305,8 @@ class InboxService extends ChangeNotifier {
 
     _setupIMessageFileWatcher();
     notifyListeners();
+    // 첫 주기를 기다리지 않고 바로 기준을 잡습니다.
+    unawaited(pollAllAuthorizedSourcesOnce());
   }
 
   /// 백그라운드 자동 감지를 중지합니다.
@@ -313,7 +340,7 @@ class InboxService extends ChangeNotifier {
             fetchFromMacOsIMessage(customDbPath: rawDbPath);
           }
         }
-      });
+      }, onError: (Object _) {});
     } catch (_) {
       // 파일 감시가 지원되지 않는 플랫폼/권한 미부여 시 주기적 타이머 폴링으로 동작
     }
@@ -696,85 +723,271 @@ class InboxService extends ChangeNotifier {
     return results;
   }
 
-  /// macOS Mail.app에서 AppleScript로 새로 도착한 읽지 않은 메일을 감지해 요약합니다.
-  Future<List<InboxSummaryItem>> fetchFromMacOsMailApp() async {
-    const script = '''
-tell application "Mail"
-  set unreadList to (messages of inbox whose read status is false)
-  if (count of unreadList) is 0 then return ""
-  set msg to item 1 of unreadList
-  return (id of msg as string) & "|||" & (sender of msg) & "|||" & (subject of msg) & "|||" & (content of msg)
-end tell
-''';
-    final res = await _spawner.run('osascript', ['-e', script]);
-    if (res.exitCode != 0 || res.stdout.toString().trim().isEmpty) {
-      return const [];
+  /// 로컬 소스 명령을 실행합니다. 실패하면 사유를 남겨 화면에 알리고 null을 돌려줍니다.
+  Future<ProcessResult?> _runLocalSource(
+    InboxSourceType source,
+    String executable,
+    List<String> arguments,
+    String hint,
+  ) async {
+    String detail;
+    try {
+      final res = await _spawner
+          .run(executable, arguments)
+          .timeout(const Duration(seconds: 30));
+      if (res.exitCode == 0) {
+        if (_sourceErrors.remove(source) != null) notifyListeners();
+        return res;
+      }
+      detail = res.stderr.toString().trim();
+    } on TimeoutException catch (_) {
+      detail = '응답 시간 초과';
+    } on ProcessException catch (e) {
+      detail = e.message;
     }
-    final parts = res.stdout.toString().trim().split('|||');
-    final rawId = parts.isNotEmpty ? parts[0].trim() : '';
-    final msgId = rawId.isNotEmpty
-        ? 'mail_$rawId'
-        : 'mail_${DateTime.now().millisecondsSinceEpoch}';
-    if (isDuplicateMessage(InboxSourceType.macosMail, msgId)) {
-      return const [];
-    }
-    final sender = parts.length > 1 ? parts[1] : 'Mail 발신자';
-    final subject = parts.length > 2 ? parts[2] : '(제목 없음)';
-    final body = parts.length > 3 ? parts[3] : '';
-    final item = await ingestAndSummarize(
-      InboxMessageRaw(
-        id: msgId,
-        source: InboxSourceType.macosMail,
-        sender: sender,
-        subject: subject,
-        body: body,
-        receivedAt: DateTime.now(),
-      ),
-    );
-    return [item];
+    _sourceErrors[source] = '$hint ($detail)';
+    notifyListeners();
+    return null;
   }
 
-  /// macOS iMessage (`~/Library/Messages/chat.db`)에서 새로 도착한 메시지를 감지해 요약합니다.
+  /// macOS Mail.app에 새로 도착한 읽지 않은 메일을 감지해 요약합니다.
+  /// 처음 확인할 때의 메일은 기준으로만 기록하고 알리지 않습니다.
+  Future<List<InboxSummaryItem>> fetchFromMacOsMailApp() async {
+    if (_mailFetching) return const [];
+    _mailFetching = true;
+    try {
+      return await _fetchNewMail();
+    } finally {
+      _mailFetching = false;
+    }
+  }
+
+  Future<List<InboxSummaryItem>> _fetchNewMail() async {
+    const hint = '시스템 설정 > 개인정보 보호 및 보안 > 자동화에서 Mail 제어를 허용해 주세요.';
+    // Mail이 꺼져 있을 때 폴링이 앱을 띄우지 않도록 먼저 확인합니다.
+    const idsScript = '''
+if application "Mail" is not running then return "$_mailNotRunning"
+tell application "Mail"
+  set idList to id of (messages of inbox whose read status is false)
+  set AppleScript's text item delimiters to ","
+  return idList as string
+end tell
+''';
+    final res = await _runLocalSource(
+      InboxSourceType.macosMail,
+      'osascript',
+      ['-e', idsScript],
+      hint,
+    );
+    final output = res?.stdout.toString().trim();
+    if (output == null || output == _mailNotRunning) return const [];
+    final ids =
+        output.split(',').map((i) => int.tryParse(i.trim())).nonNulls.toList()
+          ..sort();
+    final seen = _seenMailIds;
+    if (seen == null) {
+      _seenMailIds = ids.toSet();
+      _saveState();
+      return const [];
+    }
+
+    final items = <InboxSummaryItem>[];
+    final processed = <int>{};
+    for (final id in ids.where((i) => !seen.contains(i)).take(_maxNewPerScan)) {
+      final detail = await _runLocalSource(
+        InboxSourceType.macosMail,
+        'osascript',
+        [
+          '-e',
+          '''
+tell application "Mail"
+  set msg to first message of inbox whose id is $id
+  set sep to character id 31
+  return (sender of msg) & sep & (subject of msg) & sep & (content of msg)
+end tell
+''',
+        ],
+        hint,
+      );
+      if (detail == null) break;
+      final parts = detail.stdout.toString().trim().split('\x1f');
+      items.add(
+        await ingestAndSummarize(
+          InboxMessageRaw(
+            id: 'mail_$id',
+            source: InboxSourceType.macosMail,
+            sender: parts.isNotEmpty ? parts[0] : 'Mail 발신자',
+            subject: parts.length > 1 ? parts[1] : '(제목 없음)',
+            body: parts.length > 2 ? parts.sublist(2).join(' ') : '',
+            receivedAt: DateTime.now(),
+          ),
+        ),
+      );
+      processed.add(id);
+    }
+    // 읽은 메일은 기록에서 빼서 목록이 안 읽은 메일 수 이상으로 늘지 않게 합니다.
+    _seenMailIds = {
+      for (final id in ids)
+        if (seen.contains(id) || processed.contains(id)) id,
+    };
+    _saveState();
+    return items;
+  }
+
+  /// macOS iMessage (`~/Library/Messages/chat.db`)에 새로 도착한 메시지를 감지해 요약합니다.
+  /// 처음 확인할 때는 마지막 위치만 기록하고, 내가 보낸 메시지는 제외합니다.
   Future<List<InboxSummaryItem>> fetchFromMacOsIMessage({
     String? customDbPath,
   }) async {
-    final home = Platform.environment['HOME'] ?? '';
-    final dbPath =
+    if (_imessageFetching) return const [];
+    _imessageFetching = true;
+    try {
+      final home = Platform.environment['HOME'] ?? '';
+      return await _fetchNewIMessages(
         customDbPath ??
-        customIMessageDbPath ??
-        (home.isNotEmpty
-            ? '$home/Library/Messages/chat.db'
-            : '~/Library/Messages/chat.db');
-    final res = await _spawner.run('sqlite3', [
-      dbPath,
-      'SELECT CAST(message.ROWID AS TEXT) || "|||" || COALESCE(handle.id, "iMessage 발신자") || "|||" || COALESCE(message.text, "") '
-          'FROM message LEFT JOIN handle ON message.handle_id = handle.ROWID '
-          'WHERE message.text IS NOT NULL ORDER BY message.date DESC LIMIT 1;',
-    ]);
-    if (res.exitCode != 0 || res.stdout.toString().trim().isEmpty) {
-      return const [];
+            customIMessageDbPath ??
+            (home.isNotEmpty
+                ? '$home/Library/Messages/chat.db'
+                : '~/Library/Messages/chat.db'),
+      );
+    } finally {
+      _imessageFetching = false;
     }
-    final parts = res.stdout.toString().trim().split('|||');
-    final rowId = parts.isNotEmpty ? parts[0].trim() : '';
-    final msgId = rowId.isNotEmpty
-        ? 'imsg_$rowId'
-        : 'imsg_${DateTime.now().millisecondsSinceEpoch}';
-    if (isDuplicateMessage(InboxSourceType.imessage, msgId)) {
-      return const [];
-    }
-    final sender = parts.length > 1 ? parts[1] : 'iMessage 발신자';
-    final text = parts.length > 2 ? parts[2] : '';
-    final item = await ingestAndSummarize(
-      InboxMessageRaw(
-        id: msgId,
-        source: InboxSourceType.imessage,
-        sender: sender,
-        subject: 'iMessage 수신 메시지',
-        body: text,
-        receivedAt: DateTime.now(),
-      ),
+  }
+
+  Future<List<Map<String, dynamic>>?> _queryIMessage(
+    String dbPath,
+    String sql,
+  ) async {
+    final res = await _runLocalSource(
+      InboxSourceType.imessage,
+      'sqlite3',
+      ['-readonly', '-json', dbPath, sql],
+      '시스템 설정 > 개인정보 보호 및 보안 > 전체 디스크 접근 권한에서 이 앱을 허용해 주세요.',
     );
-    return [item];
+    if (res == null) return null;
+    final output = res.stdout.toString().trim();
+    if (output.isEmpty) return const [];
+    return (jsonDecode(output) as List).cast<Map<String, dynamic>>();
+  }
+
+  Future<List<InboxSummaryItem>> _fetchNewIMessages(String dbPath) async {
+    final last = _lastIMessageRowId;
+    if (last == null) {
+      final rows = await _queryIMessage(
+        dbPath,
+        'SELECT COALESCE(MAX(ROWID), 0) AS maxId FROM message;',
+      );
+      if (rows != null && rows.isNotEmpty) {
+        _lastIMessageRowId = rows.first['maxId'] as int;
+        _saveState();
+      }
+      return const [];
+    }
+    final rows = await _queryIMessage(
+      dbPath,
+      'SELECT message.ROWID AS rowId, COALESCE(handle.id, "") AS sender, '
+      'COALESCE(message.text, "") AS text, '
+      'hex(message.attributedBody) AS body '
+      'FROM message LEFT JOIN handle ON message.handle_id = handle.ROWID '
+      'WHERE message.ROWID > $last AND message.is_from_me = 0 '
+      'ORDER BY message.ROWID ASC LIMIT $_maxNewPerScan;',
+    );
+    if (rows == null) return const [];
+
+    final items = <InboxSummaryItem>[];
+    try {
+      for (final row in rows) {
+        final rowId = row['rowId'] as int;
+        final text = row['text'] as String;
+        final body = text.isNotEmpty
+            ? text
+            : decodeAttributedBody(row['body'] as String? ?? '');
+        // 첨부만 있는 메시지처럼 글이 없으면 요약 없이 지나갑니다.
+        if (body.isNotEmpty) {
+          final sender = row['sender'] as String;
+          items.add(
+            await ingestAndSummarize(
+              InboxMessageRaw(
+                id: 'imsg_$rowId',
+                source: InboxSourceType.imessage,
+                sender: sender.isNotEmpty ? sender : 'iMessage 발신자',
+                subject: 'iMessage 수신 메시지',
+                body: body,
+                receivedAt: DateTime.now(),
+              ),
+            ),
+          );
+        }
+        _lastIMessageRowId = rowId;
+      }
+    } finally {
+      _saveState();
+    }
+    return items;
+  }
+
+  /// 최근 macOS가 `text` 대신 `attributedBody`(typedstream)에 저장한 본문을 꺼냅니다.
+  static String decodeAttributedBody(String hex) {
+    if (hex.isEmpty) return '';
+    final bytes = [
+      for (var i = 0; i + 1 < hex.length; i += 2)
+        int.parse(hex.substring(i, i + 2), radix: 16),
+    ];
+    final marker = ascii.encode('NSString');
+    var at = -1;
+    for (var i = 0; i + marker.length <= bytes.length && at < 0; i++) {
+      var matches = true;
+      for (var j = 0; j < marker.length && matches; j++) {
+        matches = bytes[i + j] == marker[j];
+      }
+      if (matches) at = i + marker.length;
+    }
+    if (at < 0) return '';
+    // NSString 뒤의 '+' 표식 다음이 길이이며, 0x81·0x82는 2·4바이트 길이를 뜻합니다.
+    at = bytes.indexOf(0x2B, at);
+    if (at < 0 || at + 1 >= bytes.length) return '';
+    at++;
+    final extra = bytes[at] == 0x81 ? 2 : (bytes[at] == 0x82 ? 4 : 0);
+    if (at + extra >= bytes.length) return '';
+    var length = extra == 0 ? bytes[at] : 0;
+    for (var i = 0; i < extra; i++) {
+      length |= bytes[at + 1 + i] << (8 * i);
+    }
+    at += 1 + extra;
+    if (at + length > bytes.length) return '';
+    return utf8.decode(bytes.sublist(at, at + length), allowMalformed: true);
+  }
+
+  void _loadState() {
+    final file = _stateFile;
+    if (file == null || !file.existsSync()) return;
+    try {
+      final saved = jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
+      _lastIMessageRowId = saved['imessageRowId'] as int?;
+      _seenMailIds = (saved['mailIds'] as List?)?.cast<int>().toSet();
+    } on Exception catch (_) {
+      // 손상된 파일은 처음 실행처럼 기준을 다시 잡습니다.
+    } on TypeError catch (_) {
+      _lastIMessageRowId = null;
+      _seenMailIds = null;
+    }
+  }
+
+  void _saveState() {
+    final file = _stateFile;
+    if (file == null) return;
+    try {
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(
+        jsonEncode({
+          'imessageRowId': _lastIMessageRowId,
+          'mailIds': _seenMailIds?.toList(),
+        }),
+      );
+    } on FileSystemException catch (_) {
+      // 저장에 실패해도 이번 실행의 감지는 막지 않습니다.
+    }
   }
 
   @override

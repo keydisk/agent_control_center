@@ -14,6 +14,7 @@ import 'core/models/agent_models.dart';
 import 'services/effort_preference_store.dart';
 import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
+import 'services/permission_center.dart';
 import 'services/session_manager.dart';
 import 'services/trusted_folder_store.dart';
 import 'services/workspace_group_store.dart';
@@ -114,9 +115,11 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     super.initState();
     _timelineScroll.addListener(_onTimelineScrolled);
     _installStatuses.addAll(widget.initialInstallStatuses);
+    final usesRealEnvironment =
+        widget.backendOverride == null && widget.sessionManagerOverride == null;
     _notificationService =
         widget.notificationServiceOverride ??
-        NotificationService(enableOsPlugin: false);
+        NotificationService(enableOsPlugin: usesRealEnvironment);
 
     if (widget.sessionManagerOverride != null) {
       _sessionManager = widget.sessionManagerOverride!;
@@ -125,6 +128,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       // backendOverride는 주입 실행이므로 실제 폴더 신뢰·worktree 흐름을 적용하지 않습니다.
       final guarded = widget.backendOverride == null;
       _sessionManager = SessionManager(
+        permissionCenter: guarded ? PermissionCenter.load() : null,
         trustedFolders: guarded ? TrustedFolderStore.load() : null,
         effortPreferences: guarded ? EffortPreferenceStore.load() : null,
         groups: guarded ? WorkspaceGroupStore.load() : null,
@@ -193,6 +197,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       _inboxService = InboxService(
         notificationService: _notificationService,
         permissionCenter: _sessionManager.permissionCenter,
+        stateFile: usesRealEnvironment ? InboxService.defaultStateFile() : null,
       )..startAutoMonitoring();
       _ownsInboxService = true;
     }

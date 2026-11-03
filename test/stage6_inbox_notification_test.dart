@@ -14,8 +14,9 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 class _FakeInboxProcessSpawner implements ProcessSpawner {
-  String mailOutput = '101|||boss@company.com|||[긴급] 서버 점검 승인|||즉시 확인 바람';
-  String imessageOutput = '501|||+821012345678|||배포 완료되었나요?';
+  String mailIds = '100';
+  int imessageMaxRowId = 500;
+  List<Map<String, Object?>> imessageRows = const [];
 
   @override
   Future<ProcessResult> run(
@@ -25,10 +26,28 @@ class _FakeInboxProcessSpawner implements ProcessSpawner {
     Map<String, String>? environment,
   }) async {
     if (executable == 'osascript') {
-      return ProcessResult(1, 0, mailOutput, '');
+      final isDetail = arguments.last.contains('whose id is');
+      return ProcessResult(
+        1,
+        0,
+        isDetail ? 'boss@company.com\x1f[긴급] 서버 점검 승인\x1f즉시 확인 바람' : mailIds,
+        '',
+      );
     }
     if (executable == 'sqlite3') {
-      return ProcessResult(2, 0, imessageOutput, '');
+      final isBaseline = arguments.last.contains('MAX(ROWID)');
+      return ProcessResult(
+        2,
+        0,
+        jsonEncode(
+          isBaseline
+              ? [
+                  {'maxId': imessageMaxRowId},
+                ]
+              : imessageRows,
+        ),
+        '',
+      );
     }
     return ProcessResult(3, 1, '', 'not found');
   }
@@ -141,22 +160,25 @@ void main() {
         ApprovalScope.always,
       );
 
-      // 첫 번째 자동 스캔 -> 새 메일 1건 + 새 iMessage 1건 자동 감지 및 요약!
+      // 첫 번째 자동 스캔 -> 기존 메일·메시지는 기준으로만 기록하고 알리지 않음
       final firstScan = await inboxService.pollAllAuthorizedSourcesOnce();
-      expect(firstScan.length, 2);
-      expect(inboxService.summaries.length, 2);
+      expect(firstScan, isEmpty);
 
-      // 동일한 메시지 ID가 유지될 때 두 번째 자동 스캔 -> 중복 감지 방지(0건)
+      // 새 메일 1건 + 새 iMessage 1건 도착 -> 자동 감지 및 요약
+      spawner
+        ..mailIds = '100,101'
+        ..imessageRows = const [
+          {'rowId': 501, 'sender': '+821012345678', 'text': '배포 완료되었나요?'},
+        ];
       final secondScan = await inboxService.pollAllAuthorizedSourcesOnce();
-      expect(secondScan, isEmpty);
+      expect(secondScan.length, 2);
       expect(inboxService.summaries.length, 2);
 
-      // 새로운 iMessage(ROWID 502) 도착 시 자동 스캔 -> 신규 1건만 정확히 감지!
-      spawner.imessageOutput = '502|||+821099998888|||[긴급] 신규 장애 알림';
+      // 메일 ID가 유지될 때 다시 스캔 -> 중복 감지 방지
+      spawner.imessageRows = const [];
       final thirdScan = await inboxService.pollAllAuthorizedSourcesOnce();
-      expect(thirdScan.length, 1);
-      expect(thirdScan.single.source, InboxSourceType.imessage);
-      expect(inboxService.summaries.length, 3);
+      expect(thirdScan, isEmpty);
+      expect(inboxService.summaries.length, 2);
     });
 
     test('Telegram Bot API 새 메시지를 요약하고 offset을 전진시키며 실패한 메시지는 재시도한다', () async {

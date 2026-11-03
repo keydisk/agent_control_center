@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 
 import '../core/models/agent_models.dart';
@@ -69,9 +72,22 @@ class PermissionCenter extends ChangeNotifier {
   PermissionCenter({
     this.database,
     SecureCredentialVault? credentialVault,
+    this._osPermissionFile,
   }) : credentialVault = credentialVault ?? SecureCredentialVault() {
     _initDefaultAccountScopes();
+    _loadOsPermissions();
   }
+
+  factory PermissionCenter.load() {
+    final home = Platform.environment['HOME'];
+    return PermissionCenter(
+      osPermissionFile: home == null
+          ? null
+          : File('$home/.agent_control_center/os_permissions.json'),
+    );
+  }
+
+  final File? _osPermissionFile;
 
   final PermissionStore? database;
   final SecureCredentialVault credentialVault;
@@ -181,8 +197,43 @@ class PermissionCenter extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _loadOsPermissions() {
+    final file = _osPermissionFile;
+    if (file == null || !file.existsSync()) return;
+    try {
+      final saved = (jsonDecode(file.readAsStringSync()) as List).cast<String>();
+      for (final type in OsPermissionType.values) {
+        if (saved.contains(type.id)) {
+          _osPermissions[type] = ApprovalScope.always;
+        }
+      }
+    } on Exception catch (_) {
+      // 손상된 파일은 권한 없음으로 취급하고 다시 묻습니다.
+    } on TypeError catch (_) {
+      // 위와 같습니다.
+    }
+  }
+
+  /// '항상' 범위만 다음 실행까지 유지합니다.
+  void _saveOsPermissions() {
+    final file = _osPermissionFile;
+    if (file == null) return;
+    try {
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(
+        jsonEncode([
+          for (final e in _osPermissions.entries)
+            if (e.value == ApprovalScope.always) e.key.id,
+        ]),
+      );
+    } on FileSystemException catch (_) {
+      // 저장에 실패해도 이번 실행의 권한 변경은 막지 않습니다.
+    }
+  }
+
   void setOsPermissionScope(OsPermissionType type, ApprovalScope scope) {
     _osPermissions[type] = scope;
+    _saveOsPermissions();
     final entry = PermissionAuditEntry(
       id: 'audit_os_${DateTime.now().microsecondsSinceEpoch}',
       timestamp: DateTime.now(),
