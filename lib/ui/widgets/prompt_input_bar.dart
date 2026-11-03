@@ -2,8 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../core/models/agent_models.dart';
+import '../../services/skill_registry.dart';
 
-/// 멀티라인 프롬프트 입력창 + 파일/이미지 첨부 + 백엔드별 슬래시 명령 자동완성 + 백엔드/모델/폴더 선택 바
+/// 멀티라인 프롬프트 입력창 + 파일/이미지 첨부 + 백엔드별 슬래시 명령·스킬 자동완성 + 백엔드/모델/폴더 선택 바
 class PromptInputBar extends StatefulWidget {
   const PromptInputBar({
     super.key,
@@ -18,6 +19,7 @@ class PromptInputBar extends StatefulWidget {
     this.onDeviceChanged,
     this.isBusy = false,
     this.onInterrupt,
+    this.skills = const [],
   });
 
   final BackendType selectedBackend;
@@ -31,6 +33,7 @@ class PromptInputBar extends StatefulWidget {
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
   final bool isBusy;
   final VoidCallback? onInterrupt;
+  final List<SkillDefinition> skills;
 
   @override
   State<PromptInputBar> createState() => _PromptInputBarState();
@@ -39,7 +42,6 @@ class PromptInputBar extends StatefulWidget {
 class _PromptInputBarState extends State<PromptInputBar> {
   final TextEditingController _controller = TextEditingController();
   final List<String> _attachments = [];
-  List<String> _filteredSlashCommands = const [];
 
   @override
   void initState() {
@@ -54,20 +56,65 @@ class _PromptInputBarState extends State<PromptInputBar> {
     super.dispose();
   }
 
-  void _onTextChanged() {
-    final text = _controller.text;
-    if (text.startsWith('/') && !text.contains(' ') && !text.contains('\n')) {
-      final matches = widget.selectedBackend.slashCommands
-          .where((cmd) => cmd.toLowerCase().startsWith(text.toLowerCase()))
-          .toList();
-      setState(() {
-        _filteredSlashCommands = matches;
-      });
-    } else if (_filteredSlashCommands.isNotEmpty) {
-      setState(() {
-        _filteredSlashCommands = const [];
-      });
+  void _onTextChanged() => setState(() {});
+
+  Widget _buildSlashSuggestions() {
+    final query = _controller.text.toLowerCase();
+    if (!query.startsWith('/') ||
+        query.contains(' ') ||
+        query.contains('\n')) {
+      return const SizedBox.shrink();
     }
+    final commands = widget.selectedBackend.slashCommands
+        .where((cmd) => cmd.toLowerCase().startsWith(query))
+        .toList();
+    final skills = widget.skills.where((skill) {
+      final cmd = '/${skill.name}';
+      return skill.isEnabled &&
+          cmd.toLowerCase().startsWith(query) &&
+          !commands.contains(cmd);
+    }).toList();
+    if (commands.isEmpty && skills.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      constraints: const BoxConstraints(maxHeight: 160),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: SingleChildScrollView(
+        child: Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          children: [
+            for (final skill in skills)
+              _buildSlashChip(
+                '/${skill.name}',
+                avatar: const Icon(Icons.auto_awesome, size: 14),
+                tooltip: skill.description,
+              ),
+            for (final cmd in commands) _buildSlashChip(cmd),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSlashChip(String cmd, {Widget? avatar, String? tooltip}) {
+    return ActionChip(
+      key: ValueKey('slash_chip_$cmd'),
+      avatar: avatar,
+      tooltip: tooltip,
+      label: Text(cmd, style: const TextStyle(fontSize: 12)),
+      onPressed: () {
+        _controller.text = '$cmd ';
+        _controller.selection = TextSelection.fromPosition(
+          TextPosition(offset: _controller.text.length),
+        );
+      },
+    );
   }
 
   void _handleSend() {
@@ -77,7 +124,6 @@ class _PromptInputBarState extends State<PromptInputBar> {
     _controller.clear();
     setState(() {
       _attachments.clear();
-      _filteredSlashCommands = const [];
     });
     widget.onSubmit(text, attached);
   }
@@ -188,33 +234,8 @@ class _PromptInputBarState extends State<PromptInputBar> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // 슬래시 명령 자동완성 팝업 바
-          if (_filteredSlashCommands.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 6,
-                children: [
-                  for (final cmd in _filteredSlashCommands)
-                    ActionChip(
-                      key: ValueKey('slash_chip_$cmd'),
-                      label: Text(cmd, style: const TextStyle(fontSize: 12)),
-                      onPressed: () {
-                        _controller.text = '$cmd ';
-                        _controller.selection = TextSelection.fromPosition(
-                          TextPosition(offset: _controller.text.length),
-                        );
-                      },
-                    ),
-                ],
-              ),
-            ),
+          // 슬래시 명령·스킬 자동완성 팝업 바
+          _buildSlashSuggestions(),
 
           // 첨부 파일 목록
           if (_attachments.isNotEmpty)
@@ -326,7 +347,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
                   maxLines: 5,
                   decoration: InputDecoration(
                     hintText:
-                        '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령 자동완성)',
+                        '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령·스킬 자동완성)',
                     border: const OutlineInputBorder(),
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(

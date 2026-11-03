@@ -306,7 +306,7 @@ class SkillRegistry extends ChangeNotifier {
     }
     for (final m in matches) {
       buffer.writeln(
-        '- 현재 요청에 대해 `${m.skill.name}` 스킬이 자동 라우팅되었습니다 (${m.reason}).',
+        '- 현재 요청에 대해 `${m.skill.name}` 스킬(${m.skill.skillMdPath})이 자동 라우팅되었습니다 (${m.reason}).',
       );
     }
     return buffer.toString().trim();
