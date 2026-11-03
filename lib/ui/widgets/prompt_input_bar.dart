@@ -496,7 +496,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
             selectedItemBuilder: (context) => [
               for (final effort in widget.selectedBackend.supportedEfforts)
                 Text(
-                  '추론 ${effort.label}',
+                  'Effort: ${effort.label}',
                   style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
                 ),
             ],

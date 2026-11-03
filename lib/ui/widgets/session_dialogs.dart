@@ -190,7 +190,7 @@ class _EffortDropdown extends StatelessWidget {
       initialValue: value,
       isDense: true,
       borderRadius: BorderRadius.circular(8),
-      decoration: const InputDecoration(labelText: '추론 강도'),
+      decoration: const InputDecoration(labelText: 'Effort'),
       items: [
         for (final effort in backend.supportedEfforts)
           DropdownMenuItem(
