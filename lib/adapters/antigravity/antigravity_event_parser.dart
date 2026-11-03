@@ -207,6 +207,7 @@ class AntigravityEventParser {
       }
 
       // 7. 일반 도구 호출 카드 이벤트
+      final isError = state == 'ERROR' || step['error'] != null;
       events.add(
         ToolCallEvent(
           id: 'agy_tool_$stepIdx',
@@ -218,9 +219,11 @@ class AntigravityEventParser {
           arguments: toolArgs,
           result: toolOutput.isNotEmpty
               ? toolOutput
+              : isError
+              ? (step['error']?.toString() ?? '실패')
               : (state == 'DONE' ? '실행 완료' : '실행 중...'),
           isRunning: state == 'ACTIVE',
-          isError: state == 'ERROR' || step['error'] != null,
+          isError: isError,
           durationMs: durationMs,
           rawLog: trimmed,
         ),
