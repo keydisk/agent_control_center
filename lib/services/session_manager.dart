@@ -8,6 +8,7 @@ import '../core/backend/agent_backend.dart';
 import '../core/backend/backend_registry.dart';
 import '../core/models/agent_models.dart';
 import 'agent_orchestrator.dart';
+import 'effort_preference_store.dart';
 import 'permission_center.dart';
 import 'skill_registry.dart';
 import 'trusted_folder_store.dart';
@@ -131,6 +132,7 @@ class SessionManager extends ChangeNotifier {
     AgentOrchestrator? orchestrator,
     WorktreeAllocator? worktreeAllocator,
     this.trustedFolders,
+    this.effortPreferences,
     this.autoIsolateWithWorktree = false,
     this.onFolderTrustRequired,
     this.autoOrchestrateByAntigravity = true,
@@ -156,6 +158,9 @@ class SessionManager extends ChangeNotifier {
 
   /// null이면 폴더 신뢰 검사를 하지 않습니다.
   final TrustedFolderStore? trustedFolders;
+
+  /// null이면 고른 추론 강도를 기억하지 않습니다.
+  final EffortPreferenceStore? effortPreferences;
   final bool autoIsolateWithWorktree;
   final Future<bool> Function(ManagedSession session)? onFolderTrustRequired;
   bool autoOrchestrateByAntigravity;
@@ -227,7 +232,7 @@ class SessionManager extends ChangeNotifier {
     String? title,
     BackendType backendType = BackendType.antigravity,
     String? model,
-    ReasoningEffort effort = ReasoningEffort.auto,
+    ReasoningEffort? effort,
     String? workingDirectory,
     AgentBackend? backendOverride,
     List<AgentEvent>? initialEvents,
@@ -247,7 +252,12 @@ class SessionManager extends ChangeNotifier {
       title: title ?? '작업 #$_counter (${backendType.displayName})',
       backendType: backendType,
       model: selectedModel,
-      effort: backendType.resolveEffort(effort, requestedModel),
+      effort: backendType.resolveEffort(
+        effort ??
+            effortPreferences?.effortFor(backendType) ??
+            ReasoningEffort.auto,
+        requestedModel,
+      ),
       workingDirectory: workDir,
       backend: backend,
       hasDirectoryConflict: conflicts.isNotEmpty,
@@ -696,7 +706,9 @@ class SessionManager extends ChangeNotifier {
 
   /// 같은 백엔드에서만 강도를 이어받습니다. 다른 백엔드의 비용을 임의로 올리지 않기 위함입니다.
   ReasoningEffort _inheritedEffort(ManagedSession source, BackendType target) =>
-      source.backendType == target ? source.effort : target.defaultEffort;
+      source.backendType == target
+      ? source.effort
+      : effortPreferences?.effortFor(target) ?? target.defaultEffort;
 
   /// 스킬 관리 화면에서 특정 스킬을 지정하여 즉시 호출합니다.
   Future<void> invokeSkill(
@@ -842,7 +854,7 @@ class SessionManager extends ChangeNotifier {
     final requestedModel = model ?? backendType.defaultModel;
     session.model = backendType.baseModel(requestedModel);
     session.effort = backendType.resolveEffort(
-      backendType.defaultEffort,
+      effortPreferences?.effortFor(backendType) ?? backendType.defaultEffort,
       requestedModel,
     );
     if (replaceAdapter) {
@@ -877,10 +889,11 @@ class SessionManager extends ChangeNotifier {
   void updateSessionEffort(String sessionId, ReasoningEffort effort) {
     final session = _sessions[sessionId];
     if (session == null ||
-        session.effort == effort ||
         !session.backendType.supportedEfforts.contains(effort)) {
       return;
     }
+    effortPreferences?.remember(session.backendType, effort);
+    if (session.effort == effort) return;
     session.conversationIdToResume ??= session.backend.remoteConversationId;
     session.isStarted = false;
     session.effort = effort;

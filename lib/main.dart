@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 
 import 'core/backend/agent_backend.dart';
 import 'core/models/agent_models.dart';
+import 'services/effort_preference_store.dart';
 import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
 import 'services/session_manager.dart';
@@ -122,6 +123,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       final guarded = widget.backendOverride == null;
       _sessionManager = SessionManager(
         trustedFolders: guarded ? TrustedFolderStore.load() : null,
+        effortPreferences: guarded ? EffortPreferenceStore.load() : null,
         autoIsolateWithWorktree: guarded,
         onFolderTrustRequired: _confirmFolderTrust,
         onApprovalRequired: (session, req) {
@@ -266,17 +268,24 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   Future<void> _openNewSessionDialog(String? sourceSessionId) async {
     final source =
         _sessionById(sourceSessionId) ?? _sessionManager.activeSession;
+    final initialBackend = source?.backendType ?? BackendType.antigravity;
+    final efforts = _sessionManager.effortPreferences;
     final request = await showDialog<NewSessionRequest>(
       context: context,
       builder: (ctx) => NewSessionDialog(
-        initialBackend: source?.backendType ?? BackendType.antigravity,
+        initialBackend: initialBackend,
         initialModel: source?.model,
-        initialEffort: source?.effort ?? ReasoningEffort.auto,
+        initialEffort:
+            efforts?.effortFor(initialBackend) ??
+            source?.effort ??
+            ReasoningEffort.auto,
         initialFolder: source?.workingDirectory ?? Directory.current.path,
         trustedFolders: _sessionManager.trustedFolders,
+        effortPreferences: efforts,
       ),
     );
     if (request == null) return;
+    efforts?.remember(request.backend, request.effort);
     _sessionManager.createSession(
       backendType: request.backend,
       model: request.model,
@@ -293,6 +302,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       builder: (ctx) => SessionSettingsDialog(
         session: session,
         trustedFolders: _sessionManager.trustedFolders,
+        effortPreferences: _sessionManager.effortPreferences,
       ),
     );
     // 다이얼로그가 열린 사이 세션이 삭제되었을 수 있습니다.
@@ -311,7 +321,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     } else if (result.model != null) {
       _sessionManager.updateSessionModel(sessionId, result.model!);
     }
-    _sessionManager.updateSessionEffort(sessionId, result.effort);
+    // 이름만 바꿔 저장해도 예전 세션의 강도가 기억되지 않도록 변경된 경우에만 반영합니다.
+    if (result.effort != session.effort) {
+      _sessionManager.updateSessionEffort(sessionId, result.effort);
+    }
     if (result.folder != session.workingDirectory) {
       _sessionManager.updateSessionWorkingDirectory(sessionId, result.folder);
     }

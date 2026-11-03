@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../../core/models/agent_models.dart';
+import '../../services/effort_preference_store.dart';
 import '../../services/session_manager.dart';
 import '../../services/trusted_folder_store.dart';
 import '../theme/mac_theme.dart';
@@ -216,6 +217,7 @@ class NewSessionDialog extends StatefulWidget {
     this.initialModel,
     this.initialEffort = ReasoningEffort.auto,
     this.trustedFolders,
+    this.effortPreferences,
   });
 
   final BackendType initialBackend;
@@ -223,6 +225,7 @@ class NewSessionDialog extends StatefulWidget {
   final ReasoningEffort initialEffort;
   final String initialFolder;
   final TrustedFolderStore? trustedFolders;
+  final EffortPreferenceStore? effortPreferences;
 
   @override
   State<NewSessionDialog> createState() => _NewSessionDialogState();
@@ -288,7 +291,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
               onChanged: (b) => setState(() {
                 _backend = b;
                 _model = b.defaultModel;
-                _effort = b.defaultEffort;
+                _effort = widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
               }),
             ),
             const SizedBox(height: 12),
@@ -343,10 +346,12 @@ class SessionSettingsDialog extends StatefulWidget {
     super.key,
     required this.session,
     this.trustedFolders,
+    this.effortPreferences,
   });
 
   final ManagedSession session;
   final TrustedFolderStore? trustedFolders;
+  final EffortPreferenceStore? effortPreferences;
 
   @override
   State<SessionSettingsDialog> createState() => _SessionSettingsDialogState();
@@ -448,7 +453,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
                   : (b) => setState(() {
                       _backend = b;
                       _model = b.defaultModel;
-                      _effort = b.defaultEffort;
+                      _effort = widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
                     }),
             ),
             const SizedBox(height: 12),
