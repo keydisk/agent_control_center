@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'ui/theme/mac_theme.dart';
 
@@ -80,10 +81,33 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   bool _showSessionSidebar = true;
   TargetDeviceType _selectedDevice = TargetDeviceType.macosDesktop;
   final Map<BackendType, BackendInstallationStatus> _installStatuses = {};
+  final ScrollController _timelineScroll = ScrollController();
+  bool _followTimeline = true;
+  String? _timelineSessionId;
+
+  /// 사용자가 위로 스크롤하면 따라가기를 멈추고, 맨 아래로 돌아오면 다시 따라갑니다.
+  void _onTimelineScrolled() {
+    final position = _timelineScroll.position;
+    _followTimeline = position.pixels >= position.maxScrollExtent - 40;
+  }
+
+  void _followTimelineAfterBuild(String? sessionId) {
+    if (_timelineSessionId != sessionId) {
+      _timelineSessionId = sessionId;
+      _followTimeline = true;
+    }
+    if (!_followTimeline) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_followTimeline && _timelineScroll.hasClients) {
+        _timelineScroll.jumpTo(_timelineScroll.position.maxScrollExtent);
+      }
+    });
+  }
 
   @override
   void initState() {
     super.initState();
+    _timelineScroll.addListener(_onTimelineScrolled);
     _installStatuses.addAll(widget.initialInstallStatuses);
     _notificationService =
         widget.notificationServiceOverride ??
@@ -357,6 +381,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
   @override
   void dispose() {
+    _timelineScroll.dispose();
     _deepLinkSub?.cancel();
     _inboxService.removeListener(_onManagerChanged);
     _sessionManager.skillRegistry.removeListener(_onManagerChanged);
@@ -381,241 +406,281 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     final isBusy =
         active?.status == SessionStatus.running ||
         active?.status == SessionStatus.awaitingApproval;
+    _followTimelineAfterBuild(active?.sessionId);
 
     return Scaffold(
       backgroundColor: context.mac.sidebar,
-      body: Row(
-        children: [
-          if (_showSessionSidebar)
-            MultiSessionSidebar(
-              sessions: _sessionManager.sessions,
-              activeSessionId: _sessionManager.activeSessionId,
-              usageByBackend: _sessionManager.usageByBackend,
-              onSelectSession: _sessionManager.selectSession,
-              onNewSession: _openNewSessionDialog,
-              onSessionSettings: _openSessionSettings,
-              onDeleteSession: _confirmDeleteSession,
-              onStopSession: _sessionManager.stopSession,
-              onRetrySession: _sessionManager.retrySession,
-              onRerunWithBackend: (sessionId, backend) {
-                _sessionManager.rerunWithBackend(sessionId, backend);
-              },
-              onIsolateWorktree: _isolateSession,
-              onMergeWorktree: _mergeWorktree,
-              trustedFolderCount:
-                  _sessionManager.trustedFolders?.folders.length,
-              onManageTrustedFolders: () async {
-                await showDialog<void>(
-                  context: context,
-                  builder: (ctx) => TrustedFoldersDialog(
-                    store: _sessionManager.trustedFolders!,
-                  ),
-                );
-                setState(() {});
-              },
-              selectedDevice: _selectedDevice,
-              onDeviceChanged: (device) {
-                setState(() {
-                  _selectedDevice = device;
-                });
-              },
-              autoOrchestrateByAntigravity:
-                  _sessionManager.autoOrchestrateByAntigravity,
-              onAutoOrchestrateChanged: _sessionManager.setAutoOrchestration,
-            ),
-          if (_showSessionSidebar) const VerticalDivider(width: 0.5),
-          Expanded(
-            child: ColoredBox(
-              color: context.mac.window,
-              child: Column(
-                children: [
-                  _buildToolbar(active),
-                  const Divider(),
-                  if (_installStatuses[selectedBackend]?.isInstalled == false)
-                    Container(
-                      key: const ValueKey('missing_backend_banner'),
-                      color: context.mac.orange.withValues(alpha: 0.2),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.warning_amber, color: context.mac.orange),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              '${selectedBackend.displayName} CLI가 설치되어 있지 않습니다. '
-                              '설치 안내: ${selectedBackend.installGuide}',
-                              style: const TextStyle(fontSize: 12.5),
-                            ),
-                          ),
-                        ],
-                      ),
+      // 포커스가 입력창 밖에 있어도 Esc가 현재 세션의 실행을 중지합니다.
+      body: CallbackShortcuts(
+        bindings: {
+          const SingleActivator(LogicalKeyboardKey.escape): () {
+            if (isBusy) _sessionManager.stopSession(active!.sessionId);
+          },
+        },
+        child: Focus(
+          autofocus: true,
+          child: _buildBody(
+            active: active,
+            selectedBackend: selectedBackend,
+            selectedModel: selectedModel,
+            workingDir: workingDir,
+            events: events,
+            rawLogs: rawLogs,
+            isBusy: isBusy,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBody({
+    required ManagedSession? active,
+    required BackendType selectedBackend,
+    required String selectedModel,
+    required String workingDir,
+    required List<AgentEvent> events,
+    required List<String> rawLogs,
+    required bool isBusy,
+  }) {
+    return Row(
+      children: [
+        if (_showSessionSidebar)
+          MultiSessionSidebar(
+            sessions: _sessionManager.sessions,
+            activeSessionId: _sessionManager.activeSessionId,
+            usageByBackend: _sessionManager.usageByBackend,
+            onSelectSession: _sessionManager.selectSession,
+            onNewSession: _openNewSessionDialog,
+            onSessionSettings: _openSessionSettings,
+            onDeleteSession: _confirmDeleteSession,
+            onStopSession: _sessionManager.stopSession,
+            onRetrySession: _sessionManager.retrySession,
+            onRerunWithBackend: (sessionId, backend) {
+              _sessionManager.rerunWithBackend(sessionId, backend);
+            },
+            onIsolateWorktree: _isolateSession,
+            onMergeWorktree: _mergeWorktree,
+            trustedFolderCount: _sessionManager.trustedFolders?.folders.length,
+            onManageTrustedFolders: () async {
+              await showDialog<void>(
+                context: context,
+                builder: (ctx) => TrustedFoldersDialog(
+                  store: _sessionManager.trustedFolders!,
+                ),
+              );
+              setState(() {});
+            },
+            selectedDevice: _selectedDevice,
+            onDeviceChanged: (device) {
+              setState(() {
+                _selectedDevice = device;
+              });
+            },
+            autoOrchestrateByAntigravity:
+                _sessionManager.autoOrchestrateByAntigravity,
+            onAutoOrchestrateChanged: _sessionManager.setAutoOrchestration,
+          ),
+        if (_showSessionSidebar) const VerticalDivider(width: 0.5),
+        Expanded(
+          child: ColoredBox(
+            color: context.mac.window,
+            child: Column(
+              children: [
+                _buildToolbar(active),
+                const Divider(),
+                if (_installStatuses[selectedBackend]?.isInstalled == false)
+                  Container(
+                    key: const ValueKey('missing_backend_banner'),
+                    color: context.mac.orange.withValues(alpha: 0.2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
                     ),
-                  if (active != null && active.hasDirectoryConflict)
-                    Container(
-                      key: const ValueKey('active_session_conflict_banner'),
-                      color: context.mac.orange.withValues(alpha: 0.2),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(
-                            Icons.warning_amber_rounded,
-                            color: context.mac.orange,
-                          ),
-                          const SizedBox(width: 8),
-                          const Expanded(
-                            child: Text(
-                              '경고: 다른 실행 중인 작업 세션과 동일한 작업 디렉터리를 공유하고 있습니다.',
-                              style: TextStyle(fontSize: 12.5),
-                            ),
-                          ),
-                          FilledButton.tonalIcon(
-                            key: const ValueKey('banner_isolate_worktree_btn'),
-                            onPressed: () => _isolateSession(active.sessionId),
-                            icon: const Icon(Icons.call_split, size: 15),
-                            label: const Text('git worktree로 분리'),
-                          ),
-                        ],
-                      ),
-                    ),
-                  Expanded(
                     child: Row(
                       children: [
+                        Icon(Icons.warning_amber, color: context.mac.orange),
+                        const SizedBox(width: 8),
                         Expanded(
-                          flex: 3,
-                          child: events.isEmpty
-                              ? _EmptyTimeline(hasSession: active != null)
-                              : ListView.builder(
-                                  padding: const EdgeInsets.all(16),
-                                  itemCount: events.length,
-                                  itemBuilder: (context, index) =>
-                                      _buildTimelineItem(
-                                        active?.sessionId ?? 'session_1',
-                                        events[index],
-                                        active?.resolvedRequestIds ?? const {},
-                                      ),
-                                ),
-                        ),
-                        if (_showRawLogs)
-                          Expanded(
-                            flex: 2,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: context.mac.codeBackground,
-                                border: Border(
-                                  left: BorderSide(
-                                    color: Theme.of(context).dividerColor,
-                                  ),
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(10),
-                                    color: context.mac.codeHeader,
-                                    child: const Text(
-                                      '원본 JSON 스트림 로그 (Raw Logs)',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.bold,
-                                        fontFamily: kMonoFont,
-                                      ),
-                                    ),
-                                  ),
-                                  Expanded(
-                                    child: ListView.builder(
-                                      padding: const EdgeInsets.all(10),
-                                      itemCount: rawLogs.length,
-                                      itemBuilder: (context, i) =>
-                                          SelectableText(
-                                            rawLogs[i],
-                                            style: TextStyle(
-                                              fontFamily: kMonoFont,
-                                              fontSize: 11,
-                                              color: context.mac.green,
-                                            ),
-                                          ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                          child: Text(
+                            '${selectedBackend.displayName} CLI가 설치되어 있지 않습니다. '
+                            '설치 안내: ${selectedBackend.installGuide}',
+                            style: const TextStyle(fontSize: 12.5),
                           ),
+                        ),
                       ],
                     ),
                   ),
-                  PromptInputBar(
-                    skills: _sessionManager.skillRegistry.skills,
-                    selectedBackend: selectedBackend,
-                    selectedModel: selectedModel,
-                    workingDirectory: workingDir,
-                    selectedDevice: _selectedDevice,
-                    onDeviceChanged: (device) {
-                      setState(() {
-                        _selectedDevice = device;
-                      });
-                    },
-                    isBusy: isBusy,
-                    onBackendChanged: (b) {
-                      if (active != null) {
-                        _sessionManager.updateSessionBackend(
-                          active.sessionId,
-                          b,
-                          replaceAdapter: widget.backendOverride == null,
-                        );
-                      }
-                    },
-                    selectedEffort: active?.effort ?? ReasoningEffort.auto,
-                    onEffortChanged: (effort) {
-                      if (active != null) {
-                        _sessionManager.updateSessionEffort(
-                          active.sessionId,
-                          effort,
-                        );
-                      }
-                    },
-                    onModelChanged: (m) {
-                      if (active != null) {
-                        _sessionManager.updateSessionModel(active.sessionId, m);
-                      }
-                    },
-                    onWorkingDirectoryChanged: (dir) {
-                      if (active != null) {
-                        _sessionManager.updateSessionWorkingDirectory(
-                          active.sessionId,
-                          dir,
-                        );
-                      }
-                    },
-                    onSubmit: (prompt, attachments) {
-                      if (active != null) {
-                        _sessionManager.dispatchOrchestratedPrompt(
-                          active.sessionId,
-                          prompt,
-                          attachments: attachments,
-                        );
-                      }
-                    },
-                    onInterrupt: () {
-                      if (active != null) {
-                        _sessionManager.stopSession(active.sessionId);
-                      }
-                    },
+                if (active != null && active.hasDirectoryConflict)
+                  Container(
+                    key: const ValueKey('active_session_conflict_banner'),
+                    color: context.mac.orange.withValues(alpha: 0.2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.warning_amber_rounded,
+                          color: context.mac.orange,
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            '경고: 다른 실행 중인 작업 세션과 동일한 작업 디렉터리를 공유하고 있습니다.',
+                            style: TextStyle(fontSize: 12.5),
+                          ),
+                        ),
+                        FilledButton.tonalIcon(
+                          key: const ValueKey('banner_isolate_worktree_btn'),
+                          onPressed: () => _isolateSession(active.sessionId),
+                          icon: const Icon(Icons.call_split, size: 15),
+                          label: const Text('git worktree로 분리'),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
-              ),
+                Expanded(
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: events.isEmpty
+                            ? _EmptyTimeline(hasSession: active != null)
+                            : ListView.builder(
+                                controller: _timelineScroll,
+                                padding: const EdgeInsets.all(16),
+                                itemCount: events.length,
+                                itemBuilder: (context, index) =>
+                                    _buildTimelineItem(
+                                      active?.sessionId ?? 'session_1',
+                                      events[index],
+                                      active?.resolvedRequestIds ?? const {},
+                                    ),
+                              ),
+                      ),
+                      if (_showRawLogs)
+                        Expanded(
+                          flex: 2,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: context.mac.codeBackground,
+                              border: Border(
+                                left: BorderSide(
+                                  color: Theme.of(context).dividerColor,
+                                ),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  color: context.mac.codeHeader,
+                                  child: const Text(
+                                    '원본 JSON 스트림 로그 (Raw Logs)',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.bold,
+                                      fontFamily: kMonoFont,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: ListView.builder(
+                                    padding: const EdgeInsets.all(10),
+                                    itemCount: rawLogs.length,
+                                    itemBuilder: (context, i) => SelectableText(
+                                      rawLogs[i],
+                                      style: TextStyle(
+                                        fontFamily: kMonoFont,
+                                        fontSize: 11,
+                                        color: context.mac.green,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (isBusy && active != null)
+                  AgentActivityBar(
+                    activity: describeAgentActivity(
+                      events,
+                      awaitingApproval:
+                          active.status == SessionStatus.awaitingApproval,
+                    ),
+                    startedAt: active.turnStartedAt ?? DateTime.now(),
+                  ),
+                PromptInputBar(
+                  skills: _sessionManager.skillRegistry.skills,
+                  selectedBackend: selectedBackend,
+                  selectedModel: selectedModel,
+                  workingDirectory: workingDir,
+                  selectedDevice: _selectedDevice,
+                  onDeviceChanged: (device) {
+                    setState(() {
+                      _selectedDevice = device;
+                    });
+                  },
+                  isBusy: isBusy,
+                  onBackendChanged: (b) {
+                    if (active != null) {
+                      _sessionManager.updateSessionBackend(
+                        active.sessionId,
+                        b,
+                        replaceAdapter: widget.backendOverride == null,
+                      );
+                    }
+                  },
+                  selectedEffort: active?.effort ?? ReasoningEffort.auto,
+                  onEffortChanged: (effort) {
+                    if (active != null) {
+                      _sessionManager.updateSessionEffort(
+                        active.sessionId,
+                        effort,
+                      );
+                    }
+                  },
+                  onModelChanged: (m) {
+                    if (active != null) {
+                      _sessionManager.updateSessionModel(active.sessionId, m);
+                    }
+                  },
+                  onWorkingDirectoryChanged: (dir) {
+                    if (active != null) {
+                      _sessionManager.updateSessionWorkingDirectory(
+                        active.sessionId,
+                        dir,
+                      );
+                    }
+                  },
+                  onSubmit: (prompt, attachments) {
+                    if (active != null) {
+                      _sessionManager.dispatchOrchestratedPrompt(
+                        active.sessionId,
+                        prompt,
+                        attachments: attachments,
+                      );
+                    }
+                  },
+                  onInterrupt: () {
+                    if (active != null) {
+                      _sessionManager.stopSession(active.sessionId);
+                    }
+                  },
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -763,6 +828,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 ],
               ),
               const SizedBox(height: 8),
+              if (event.thinking.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    '✻ ${event.thinking}',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontStyle: FontStyle.italic,
+                      color: context.mac.secondaryLabel,
+                    ),
+                  ),
+                ),
               MarkdownMessageView(markdown: event.text),
             ],
           ),
@@ -786,6 +863,28 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           ),
         );
       case DoneEvent():
+        if (event.stopReason == DoneEvent.interrupted) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                Icon(
+                  Icons.stop_circle_outlined,
+                  size: 15,
+                  color: context.mac.red,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  '사용자가 중지했습니다. 다음 프롬프트로 대화를 이어갈 수 있습니다.',
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    color: context.mac.secondaryLabel,
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 6),
           child: Row(

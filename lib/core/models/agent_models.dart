@@ -513,6 +513,22 @@ class ToolCallEvent extends AgentEvent {
   final bool isError;
   final int durationMs;
 
+  /// CLI처럼 `Bash(git status)` 형태로 한 줄 요약합니다.
+  String get displayLine {
+    final candidates = [
+      for (final key in const ['command', 'file_path', 'path', 'pattern'])
+        arguments[key],
+      ...arguments.values,
+    ];
+    final value = candidates
+        .whereType<String>()
+        .where((v) => v.trim().isNotEmpty)
+        .firstOrNull;
+    if (value == null) return toolName;
+    final line = value.trim().split('\n').first;
+    return '$toolName(${line.length > 80 ? '${line.substring(0, 80)}…' : line})';
+  }
+
   @override
   String get eventKind => 'tool_call';
 
@@ -653,6 +669,8 @@ class DoneEvent extends AgentEvent {
   final TokenUsage usage;
   final int durationMs;
   final String stopReason;
+
+  static const interrupted = 'interrupted';
 
   @override
   String get eventKind => 'done';

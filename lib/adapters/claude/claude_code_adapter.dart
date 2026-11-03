@@ -52,6 +52,7 @@ class ClaudeCodeAdapter implements AgentBackend {
       '--output-format',
       'stream-json',
       '--verbose',
+      '--include-partial-messages',
       '--permission-prompts',
       'host',
       if (config.model.isNotEmpty) ...['--model', config.model],
@@ -190,9 +191,7 @@ class ClaudeCodeAdapter implements AgentBackend {
   }
 
   @override
-  Future<void> interrupt() async {
-    _process?.kill();
-  }
+  Future<void> interrupt() => _cleanupProcess();
 
   @override
   Future<void> resume(
