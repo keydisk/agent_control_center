@@ -590,6 +590,46 @@ class ToolCallCard extends StatelessWidget {
   }
 }
 
+/// 세션의 파일 변경을 한곳에서 펼쳐 봅니다.
+class FileChangesCard extends StatelessWidget {
+  const FileChangesCard({super.key, required this.events});
+
+  final List<FileDiffEvent> events;
+
+  @override
+  Widget build(BuildContext context) {
+    final fileCount = events.map((event) => event.diff.filePath).toSet().length;
+    return Card(
+      margin: const EdgeInsets.symmetric(vertical: 4),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: context.mac.separator, width: 0.5),
+      ),
+      child: ExpansionTile(
+        key: PageStorageKey('file_changes_${events.first.sessionId}'),
+        leading: const Icon(Icons.difference_outlined, size: 20),
+        title: Text(
+          '파일 변경 $fileCount개',
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: [
+          // Diff 텍스트의 스크롤 위치와 목록의 펼침 상태가 충돌하지 않게 분리합니다.
+          PageStorage(
+            bucket: PageStorageBucket(),
+            child: Column(
+              children: [
+                for (final event in events)
+                  FileDiffViewerCard(key: ValueKey(event.id), event: event),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// 파일 변경 Diff 뷰어 카드
 class FileDiffViewerCard extends StatelessWidget {
   const FileDiffViewerCard({super.key, required this.event});

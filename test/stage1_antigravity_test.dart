@@ -96,7 +96,10 @@ void main() {
         allEvents.whereType<SkillInvokedEvent>().first.skillName,
         equals('ego-browser'),
       );
-      expect(allEvents.whereType<ToolCallEvent>().length, greaterThanOrEqualTo(2));
+      expect(
+        allEvents.whereType<ToolCallEvent>().length,
+        greaterThanOrEqualTo(2),
+      );
       expect(allEvents.whereType<FileDiffEvent>().length, equals(1));
       expect(
         allEvents.whereType<FileDiffEvent>().first.diff.filePath,
@@ -140,8 +143,9 @@ void main() {
 
       // ApprovalRequestEvent가 발행될 때까지 대기
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      final approvalEvents =
-          receivedEvents.whereType<ApprovalRequestEvent>().toList();
+      final approvalEvents = receivedEvents
+          .whereType<ApprovalRequestEvent>()
+          .toList();
       expect(approvalEvents.length, equals(1));
 
       final reqId = approvalEvents.first.request.id;
@@ -208,6 +212,24 @@ void main() {
                     newContent: 'final int x = 42;',
                   ),
                 ),
+                MessageEvent(
+                  id: 'm2',
+                  sessionId: 's1',
+                  backend: BackendType.antigravity,
+                  timestamp: now,
+                  role: 'assistant',
+                  text: '파일 수정이 끝났습니다.',
+                ),
+                FileDiffEvent(
+                  id: 'd2',
+                  sessionId: 's1',
+                  backend: BackendType.antigravity,
+                  timestamp: now,
+                  diff: const FileDiffItem(
+                    filePath: 'lib/app.dart',
+                    newContent: 'class App {}',
+                  ),
+                ),
               ],
               initialRawLogs: const ['{"event":"init"}'],
             ),
@@ -217,8 +239,18 @@ void main() {
 
       expect(find.text('에이전트 컨트롤 센터'), findsOneWidget);
       expect(find.text('run_command(flutter test)'), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(find.text('파일 수정이 끝났습니다.'), findsOneWidget);
+      expect(find.text('파일 변경 2개'), findsOneWidget);
+      expect(find.text('파일 변경 Diff: lib/main.dart'), findsNothing);
+      await tester.ensureVisible(find.text('파일 변경 2개'));
+      await tester.tap(find.text('파일 변경 2개'));
+      await tester.pumpAndSettle();
       expect(find.text('파일 변경 Diff: lib/main.dart'), findsOneWidget);
+      expect(find.text('파일 변경 Diff: lib/app.dart'), findsOneWidget);
       expect(find.text('- int x = 1;'), findsNothing);
+      await tester.ensureVisible(find.text('파일 변경 Diff: lib/main.dart'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('파일 변경 Diff: lib/main.dart'));
       await tester.pumpAndSettle();
       expect(find.text('- int x = 1;'), findsOneWidget);
