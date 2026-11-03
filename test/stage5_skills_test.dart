@@ -9,6 +9,7 @@ import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/skill_registry.dart';
 import 'package:agent_control_center/ui/widgets/prompt_input_bar.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
@@ -261,6 +262,78 @@ description: Chromium browser skill for web automation
       await tester.pump();
       expect(tester.widget<TextField>(field).controller!.text, '/ego-browser ');
       expect(chip('ego-browser'), findsNothing);
+    });
+
+    testWidgets('키보드 ↑↓로 후보를 고르고 Tab/Enter로 완성하며 스킬 설명을 표시한다', (tester) async {
+      SkillDefinition skill(String name) => SkillDefinition(
+        name: name,
+        description: '$name 설명',
+        skillMdPath: '/skills/$name/SKILL.md',
+        directoryPath: '/skills/$name',
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PromptInputBar(
+              selectedBackend: BackendType.claudeCode,
+              selectedModel: BackendType.claudeCode.defaultModel,
+              workingDirectory: '/tmp',
+              onBackendChanged: (_) {},
+              onModelChanged: (_) {},
+              onWorkingDirectoryChanged: (_) {},
+              onSubmit: (_, _) {},
+              skills: [skill('zz-alpha'), skill('zz-beta')],
+            ),
+          ),
+        ),
+      );
+
+      final field = find.byKey(const ValueKey('prompt_textfield'));
+      String text() => tester.widget<TextField>(field).controller!.text;
+      Future<void> press(LogicalKeyboardKey key) async {
+        await tester.sendKeyEvent(key);
+        await tester.pump();
+      }
+
+      // Tab: 첫 후보로 완성, 포커스 유지
+      await tester.enterText(field, '/zz');
+      await tester.pump();
+      expect(find.textContaining('zz-alpha 설명'), findsOneWidget);
+      await press(LogicalKeyboardKey.tab);
+      expect(text(), '/zz-alpha ');
+      expect(find.byKey(const ValueKey('slash_suggestion_hint')), findsNothing);
+      expect(tester.widget<TextField>(field).focusNode!.hasFocus, isTrue);
+
+      // ↓ + Enter: 다음 후보로 완성, 설명도 따라 바뀜
+      await tester.enterText(field, '/zz');
+      await tester.pump();
+      await press(LogicalKeyboardKey.arrowDown);
+      expect(find.textContaining('zz-beta 설명'), findsOneWidget);
+      await press(LogicalKeyboardKey.enter);
+      expect(text(), '/zz-beta ');
+
+      // ↑: 맨 위에서 마지막 후보로 순환
+      await tester.enterText(field, '/zz');
+      await tester.pump();
+      await press(LogicalKeyboardKey.arrowUp);
+      await press(LogicalKeyboardKey.tab);
+      expect(text(), '/zz-beta ');
+
+      // 글자를 더 입력하면 선택이 첫 후보로 초기화
+      await tester.enterText(field, '/zz');
+      await tester.pump();
+      await press(LogicalKeyboardKey.arrowDown);
+      await tester.enterText(field, '/zz-');
+      await tester.pump();
+      await press(LogicalKeyboardKey.tab);
+      expect(text(), '/zz-alpha ');
+
+      // 후보가 없으면 Tab을 가로채지 않음
+      await tester.enterText(field, '/없는스킬');
+      await tester.pump();
+      await press(LogicalKeyboardKey.tab);
+      expect(text(), '/없는스킬');
     });
 
     test('로컬에서 찾은 스킬의 라우팅 지시문에 SKILL.md 경로가 포함된다', () {

@@ -1,5 +1,7 @@
 import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/skill_registry.dart';
@@ -41,7 +43,10 @@ class PromptInputBar extends StatefulWidget {
 
 class _PromptInputBarState extends State<PromptInputBar> {
   final TextEditingController _controller = TextEditingController();
+  late final FocusNode _focusNode = FocusNode(onKeyEvent: _onPromptKeyEvent);
   final List<String> _attachments = [];
+  String _lastText = '';
+  int _highlightedIndex = 0;
 
   @override
   void initState() {
@@ -53,65 +58,146 @@ class _PromptInputBarState extends State<PromptInputBar> {
   void dispose() {
     _controller.removeListener(_onTextChanged);
     _controller.dispose();
+    _focusNode.dispose();
     super.dispose();
   }
 
-  void _onTextChanged() => setState(() {});
+  void _onTextChanged() {
+    setState(() {
+      if (_controller.text != _lastText) {
+        _lastText = _controller.text;
+        _highlightedIndex = 0;
+      }
+    });
+  }
 
-  Widget _buildSlashSuggestions() {
+  List<({String cmd, SkillDefinition? skill})> get _slashSuggestions {
     final query = _controller.text.toLowerCase();
-    if (!query.startsWith('/') ||
-        query.contains(' ') ||
-        query.contains('\n')) {
-      return const SizedBox.shrink();
+    if (!query.startsWith('/') || query.contains(' ') || query.contains('\n')) {
+      return const [];
     }
     final commands = widget.selectedBackend.slashCommands
         .where((cmd) => cmd.toLowerCase().startsWith(query))
         .toList();
-    final skills = widget.skills.where((skill) {
-      final cmd = '/${skill.name}';
-      return skill.isEnabled &&
-          cmd.toLowerCase().startsWith(query) &&
-          !commands.contains(cmd);
-    }).toList();
-    if (commands.isEmpty && skills.isEmpty) return const SizedBox.shrink();
+    return [
+      for (final skill in widget.skills)
+        if (skill.isEnabled &&
+            '/${skill.name}'.toLowerCase().startsWith(query) &&
+            !commands.contains('/${skill.name}'))
+          (cmd: '/${skill.name}', skill: skill),
+      for (final cmd in commands) (cmd: cmd, skill: null),
+    ];
+  }
+
+  void _applySuggestion(String cmd) {
+    _controller.text = '$cmd ';
+    _controller.selection = TextSelection.fromPosition(
+      TextPosition(offset: _controller.text.length),
+    );
+    _focusNode.requestFocus();
+  }
+
+  /// 자동완성 목록이 열려 있을 때 ↑/↓로 이동하고 Tab/Enter로 완성합니다.
+  KeyEventResult _onPromptKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) return KeyEventResult.ignored;
+    final suggestions = _slashSuggestions;
+    if (suggestions.isEmpty) return KeyEventResult.ignored;
+
+    final key = event.logicalKey;
+    if (key == LogicalKeyboardKey.arrowDown ||
+        key == LogicalKeyboardKey.arrowUp) {
+      final delta = key == LogicalKeyboardKey.arrowDown ? 1 : -1;
+      setState(() {
+        _highlightedIndex = (_highlightedIndex + delta) % suggestions.length;
+      });
+      return KeyEventResult.handled;
+    }
+    if (event is KeyDownEvent &&
+        (key == LogicalKeyboardKey.tab ||
+            key == LogicalKeyboardKey.enter ||
+            key == LogicalKeyboardKey.numpadEnter)) {
+      _applySuggestion(suggestions[_highlightedIndex % suggestions.length].cmd);
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _buildSlashSuggestions() {
+    final suggestions = _slashSuggestions;
+    if (suggestions.isEmpty) return const SizedBox.shrink();
+    final highlighted = _highlightedIndex % suggestions.length;
+    final description = suggestions[highlighted].skill?.description;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-      constraints: const BoxConstraints(maxHeight: 160),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerHighest,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: SingleChildScrollView(
-        child: Wrap(
-          spacing: 6,
-          runSpacing: 6,
-          children: [
-            for (final skill in skills)
-              _buildSlashChip(
-                '/${skill.name}',
-                avatar: const Icon(Icons.auto_awesome, size: 14),
-                tooltip: skill.description,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.15,
+            ),
+            child: SingleChildScrollView(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final (index, item) in suggestions.indexed)
+                    _buildSlashChip(
+                      item.cmd,
+                      avatar: item.skill == null
+                          ? null
+                          : const Icon(Icons.auto_awesome, size: 14),
+                      tooltip: item.skill?.description,
+                      isHighlighted: index == highlighted,
+                    ),
+                ],
               ),
-            for (final cmd in commands) _buildSlashChip(cmd),
-          ],
-        ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            key: const ValueKey('slash_suggestion_hint'),
+            '${description == null ? '' : '$description\n'}↑↓ 선택 · Tab/Enter 완성',
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildSlashChip(String cmd, {Widget? avatar, String? tooltip}) {
-    return ActionChip(
-      key: ValueKey('slash_chip_$cmd'),
-      avatar: avatar,
-      tooltip: tooltip,
-      label: Text(cmd, style: const TextStyle(fontSize: 12)),
-      onPressed: () {
-        _controller.text = '$cmd ';
-        _controller.selection = TextSelection.fromPosition(
-          TextPosition(offset: _controller.text.length),
+  Widget _buildSlashChip(
+    String cmd, {
+    Widget? avatar,
+    String? tooltip,
+    required bool isHighlighted,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Builder(
+      builder: (chipContext) {
+        if (isHighlighted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (chipContext.mounted) {
+              Scrollable.ensureVisible(chipContext, alignment: 0.5);
+            }
+          });
+        }
+        return ActionChip(
+          key: ValueKey('slash_chip_$cmd'),
+          avatar: avatar,
+          tooltip: tooltip,
+          backgroundColor: isHighlighted ? colors.primaryContainer : null,
+          side: isHighlighted ? BorderSide(color: colors.primary) : null,
+          label: Text(cmd, style: const TextStyle(fontSize: 12)),
+          onPressed: () => _applySuggestion(cmd),
         );
       },
     );
@@ -181,9 +267,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
         title: const Text('작업 디렉터리 변경'),
         content: TextField(
           controller: dirCtrl,
-          decoration: const InputDecoration(
-            labelText: '작업 디렉터리 경로',
-          ),
+          decoration: const InputDecoration(labelText: '작업 디렉터리 경로'),
         ),
         actions: [
           if (Platform.isMacOS)
@@ -226,9 +310,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surfaceContainerLow,
-        border: Border(
-          top: BorderSide(color: Theme.of(context).dividerColor),
-        ),
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -343,6 +425,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
                 child: TextField(
                   key: const ValueKey('prompt_textfield'),
                   controller: _controller,
+                  focusNode: _focusNode,
                   minLines: 1,
                   maxLines: 5,
                   decoration: InputDecoration(

@@ -477,6 +477,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                                   color: Colors.black26,
                                   child: const Text(
                                     '원본 JSON 스트림 로그 (Raw Logs)',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                     style: TextStyle(
                                       fontSize: 12,
                                       fontWeight: FontWeight.bold,
