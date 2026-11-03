@@ -123,6 +123,21 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  for (final error
+                      in widget.inboxService.sourceErrors.entries)
+                    Padding(
+                      key: ValueKey('inbox_source_error_${error.key.id}'),
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Text(
+                        '${error.key.label}: ${error.value}',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: context.mac.orange,
+                        ),
+                      ),
+                    ),
                   // 요약 모델 및 외부 전송 범위 설정 바
                   Container(
                     padding: const EdgeInsets.all(10),

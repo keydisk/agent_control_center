@@ -94,9 +94,9 @@ class NotificationService extends ChangeNotifier {
     if (!enableOsPlugin) return;
     try {
       const macOsInit = DarwinInitializationSettings(
-        requestAlertPermission: false,
-        requestBadgePermission: false,
-        requestSoundPermission: false,
+        requestAlertPermission: true,
+        requestBadgePermission: true,
+        requestSoundPermission: true,
       );
       const linuxInit = LinuxInitializationSettings(
         defaultActionName: '열기',
