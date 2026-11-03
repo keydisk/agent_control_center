@@ -144,6 +144,8 @@ class CodexAdapter implements AgentBackend {
         '-s',
         'workspace-write',
       ],
+      for (final dir in cfg.trustedDirectories)
+        if (dir != cfg.workingDirectory) ...['--add-dir', dir],
       for (final img in attachments) ...['-i', img],
       ...cfg.extraArgs,
       if (_activeThreadId != null && _activeThreadId!.isNotEmpty) ...[
@@ -161,6 +163,9 @@ class CodexAdapter implements AgentBackend {
     );
     _stdoutSub = _process!.stdoutLines.listen(_onStdoutLine);
     _stderrSub = _process!.stderrLines.listen(_onStderrLine);
+    // 열어 두면 codex exec가 추가 입력을 기다리며 시작하지 않습니다.
+    final process = _process;
+    if (process is IoManagedProcess) await process.closeStdin();
   }
 
   @override
@@ -226,11 +231,13 @@ class CodexAdapter implements AgentBackend {
         backendType: config.backendType,
         workingDirectory: config.workingDirectory,
         model: config.model,
+        effort: config.effort,
         conversationId: conversationId,
         extraArgs: config.extraArgs,
         environment: config.environment,
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
+        trustedDirectories: config.trustedDirectories,
       ),
     );
   }

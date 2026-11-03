@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import '../../core/backend/agent_backend.dart';
 import '../../core/backend/local_hook_bridge.dart';
@@ -13,10 +14,17 @@ class AntigravityAdapter implements AgentBackend {
   AntigravityAdapter({
     ProcessSpawner? spawner,
     LocalHookBridgeServer? hookBridge,
-  }) : _spawner = spawner ?? const IoProcessSpawner(),
+    File? userSettingsFile,
+  }) : _userSettingsFile = userSettingsFile ?? _defaultUserSettingsFile(),
+       _spawner = spawner ?? const IoProcessSpawner(),
        _hookBridge = hookBridge,
        _ownsHookBridge = hookBridge == null;
 
+  static File _defaultUserSettingsFile() => File(
+    '${Platform.environment['HOME'] ?? ''}/.gemini/antigravity-cli/settings.json',
+  );
+
+  final File _userSettingsFile;
   final ProcessSpawner _spawner;
   LocalHookBridgeServer? _hookBridge;
   final bool _ownsHookBridge;
@@ -33,12 +41,12 @@ class AntigravityAdapter implements AgentBackend {
   AntigravityEventParser? _parser;
   AgentSessionConfig? _config;
 
-  /// 사용자의 답을 기다리는 자동 거부 명령 (요청 ID → 명령)
-  final Map<String, String> _deniedCommands = {};
-  final List<String> _newlyApprovedCommands = [];
+  /// 사용자의 답을 기다리는 자동 거부 규칙 (요청 ID → 규칙)
+  final Map<String, String> _deniedRules = {};
+  final List<String> _newlyApprovedRules = [];
 
   // ponytail: 1회 승인도 이 프로세스가 끝날 때까지 유지됩니다. --settings는 시작할 때만 적용되기 때문입니다.
-  final Set<String> _allowedCommands = {};
+  final Set<String> _allowedRules = {};
   DoneEvent? _heldDone;
   TokenUsage _carriedUsage = const TokenUsage();
 
@@ -93,11 +101,18 @@ class AntigravityAdapter implements AgentBackend {
         config.conversationId!,
       ],
       if (config.autoApproveBypassEnabled) '--dangerously-skip-permissions',
-      if (_allowedCommands.isNotEmpty) ...[
+      if (_allowedRules.isNotEmpty || config.trustedDirectories.isNotEmpty) ...[
         '--settings',
         jsonEncode({
           'permissions': {
-            'allow': [for (final c in _allowedCommands) 'command($c)'],
+            'allow': {
+              ..._userAllowRules(),
+              for (final dir in config.trustedDirectories) ...[
+                'read_file($dir)',
+                'write_file($dir)',
+              ],
+              ..._allowedRules,
+            }.toList(),
           },
         }),
       ],
@@ -118,6 +133,21 @@ class AntigravityAdapter implements AgentBackend {
   String jsonEncodeHook(ApprovalRequestData req) =>
       '{"hook":"PreToolUse","tool":"${req.toolName}","resource":"${req.targetResource}"}';
 
+  /// 사용자의 기존 허용 규칙을 --settings가 가리지 않도록 함께 넘깁니다.
+  List<String> _userAllowRules() {
+    try {
+      final saved =
+          jsonDecode(_userSettingsFile.readAsStringSync())
+              as Map<String, dynamic>;
+      final permissions = saved['permissions'] as Map<String, dynamic>?;
+      return (permissions?['allow'] as List?)?.cast<String>() ?? const [];
+    } on Exception catch (_) {
+      return const [];
+    } on TypeError catch (_) {
+      return const [];
+    }
+  }
+
   void _onStdoutLine(String line) {
     _rawLogsController.add(line);
     final parser = _parser;
@@ -131,7 +161,7 @@ class AntigravityAdapter implements AgentBackend {
       }
       if (ev is ApprovalRequestEvent &&
           ev.id.startsWith(AntigravityEventParser.deniedRequestPrefix)) {
-        _deniedCommands[ev.id] = ev.request.arguments['CommandLine'] as String;
+        _deniedRules[ev.id] = parser.deniedRules[ev.id]!;
       }
       _eventsController.add(ev);
     }
@@ -141,11 +171,11 @@ class AntigravityAdapter implements AgentBackend {
   Future<void> _settleTurn() async {
     final done = _heldDone;
     final cfg = _config;
-    if (done == null || cfg == null || _deniedCommands.isNotEmpty) return;
+    if (done == null || cfg == null || _deniedRules.isNotEmpty) return;
     _heldDone = null;
     final usage = _carriedUsage + done.usage;
-    final approved = List.of(_newlyApprovedCommands);
-    _newlyApprovedCommands.clear();
+    final approved = List.of(_newlyApprovedRules);
+    _newlyApprovedRules.clear();
     final conversationId = _parser?.conversationId;
     if (approved.isEmpty || conversationId == null) {
       _carriedUsage = const TokenUsage();
@@ -168,7 +198,7 @@ class AntigravityAdapter implements AgentBackend {
     _carriedUsage = usage;
     await resume(conversationId, cfg);
     await send(
-      '사용자가 다음 명령의 실행을 승인했습니다. 이 명령을 다시 실행하고 중단된 작업을 이어가세요.\n'
+      '사용자가 다음 권한을 승인했습니다. 거부됐던 작업을 다시 실행하고 중단된 작업을 이어가세요.\n'
       '${approved.map((c) => '- $c').join('\n')}',
     );
   }
@@ -240,14 +270,14 @@ class AntigravityAdapter implements AgentBackend {
 
   @override
   Future<void> respondToApproval(ApprovalDecision decision) async {
-    final command = _deniedCommands.remove(decision.requestId);
-    if (command == null) {
+    final rule = _deniedRules.remove(decision.requestId);
+    if (rule == null) {
       _hookBridge?.resolveApproval(decision);
       return;
     }
     if (decision.approved) {
-      _allowedCommands.add(command);
-      _newlyApprovedCommands.add(command);
+      _allowedRules.add(rule);
+      _newlyApprovedRules.add(rule);
     }
     await _settleTurn();
   }
@@ -265,8 +295,8 @@ class AntigravityAdapter implements AgentBackend {
 
   @override
   Future<void> interrupt() {
-    _deniedCommands.clear();
-    _newlyApprovedCommands.clear();
+    _deniedRules.clear();
+    _newlyApprovedRules.clear();
     _heldDone = null;
     return _cleanupProcess();
   }
@@ -285,6 +315,7 @@ class AntigravityAdapter implements AgentBackend {
         environment: config.environment,
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
+        trustedDirectories: config.trustedDirectories,
       ),
     );
   }

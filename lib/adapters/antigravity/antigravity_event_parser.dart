@@ -18,6 +18,26 @@ class AntigravityEventParser {
   int _counter = 0;
   bool _askedApprovalForDenial = false;
 
+  /// 자동 거부된 승인 요청별로 `permissions.allow`에 넣을 규칙
+  final Map<String, String> deniedRules = {};
+
+  static String? _ruleForDenial(
+    String toolName,
+    Map<String, dynamic> args,
+    String error,
+  ) {
+    if (!error.contains('denied permission')) return null;
+    final named = RegExp(
+      r'denied permission for (\w+\(.+\))\s*$',
+      multiLine: true,
+    ).firstMatch(error);
+    if (named != null) return named.group(1);
+    final command = args['CommandLine'];
+    return toolName == 'run_command' && command is String
+        ? 'command($command)'
+        : null;
+  }
+
   String _nextId(String prefix) => '${prefix}_${sessionId}_${++_counter}';
 
   List<AgentEvent> parseLine(String line) {
@@ -241,11 +261,10 @@ class AntigravityEventParser {
       );
 
       // 헤드리스 모드는 권한을 묻지 못하고 거부하므로 앱에서 대신 묻습니다.
-      final command = toolArgs['CommandLine'];
-      if (toolName == 'run_command' &&
-          command is String &&
-          toolError.contains('denied permission')) {
+      final deniedRule = _ruleForDenial(toolName, toolArgs, toolError);
+      if (deniedRule != null) {
         _askedApprovalForDenial = true;
+        deniedRules['$deniedRequestPrefix$stepIdx'] = deniedRule;
         events.add(
           ApprovalRequestEvent(
             request: ApprovalRequestData(
@@ -255,7 +274,7 @@ class AntigravityEventParser {
               toolName: toolName,
               arguments: toolArgs,
               category: ApprovalRequestData.classifyTool(toolName, toolArgs),
-              reason: 'Antigravity가 이 명령의 실행 권한을 요청했습니다. 승인하면 작업을 이어갑니다.',
+              reason: 'Antigravity가 $deniedRule 권한을 요청했습니다. 승인하면 작업을 이어갑니다.',
               isDestructive: ApprovalRequestData.detectDestructive(
                 toolName,
                 toolArgs,

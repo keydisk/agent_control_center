@@ -16,6 +16,7 @@ class AgentSessionConfig {
     this.environment = const {},
     this.systemPromptAppend = '',
     this.autoApproveBypassEnabled = false,
+    this.trustedDirectories = const [],
   });
 
   final String sessionId;
@@ -28,6 +29,9 @@ class AgentSessionConfig {
   final Map<String, String> environment;
   final String systemPromptAppend;
   final bool autoApproveBypassEnabled;
+
+  /// 승인 없이 읽고 쓸 수 있는 폴더 (신뢰 폴더와 그 세션의 worktree)
+  final List<String> trustedDirectories;
 
   String get effectiveModel =>
       model.isNotEmpty ? model : backendType.defaultModel;
@@ -81,6 +85,9 @@ class IoManagedProcess implements ManagedProcess {
   void writeLine(String line) {
     _process.stdin.writeln(line);
   }
+
+  /// 입력이 끝났음을 알립니다. 프롬프트를 인자로 받는 CLI는 이것을 기다립니다.
+  Future<void> closeStdin() => _process.stdin.close();
 
   @override
   bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
