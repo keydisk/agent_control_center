@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:agent_control_center/core/backend/agent_backend.dart';
@@ -6,8 +7,11 @@ import 'package:agent_control_center/main.dart';
 import 'package:agent_control_center/services/inbox_service.dart';
 import 'package:agent_control_center/services/notification_service.dart';
 import 'package:agent_control_center/services/permission_center.dart';
+import 'package:agent_control_center/ui/screens/inbox_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 class _FakeInboxProcessSpawner implements ProcessSpawner {
   String mailOutput = '101|||boss@company.com|||[긴급] 서버 점검 승인|||즉시 확인 바람';
@@ -153,6 +157,155 @@ void main() {
       expect(thirdScan.length, 1);
       expect(thirdScan.single.source, InboxSourceType.imessage);
       expect(inboxService.summaries.length, 3);
+    });
+
+    test('Telegram Bot API 새 메시지를 요약하고 offset을 전진시키며 실패한 메시지는 재시도한다', () async {
+      final requests = <Uri>[];
+      var responseBody = jsonEncode({
+        'ok': true,
+        'result': [
+          {
+            'update_id': 10,
+            'message': {
+              'from': {'first_name': '주영', 'last_name': '최'},
+              'chat': {'id': 1, 'type': 'private'},
+              'text': '[긴급] 서버 장애 확인 부탁드립니다',
+            },
+          },
+          {
+            'update_id': 11,
+            'message': {
+              'from': {'first_name': '봇 사용자'},
+              'chat': {'id': -5, 'title': '개발팀'},
+              'caption': '배포 스크린샷',
+            },
+          },
+          // 텍스트 없는 업데이트는 요약 없이 건너뛰되 offset은 전진
+          {
+            'update_id': 12,
+            'message': {'sticker': {}},
+          },
+        ],
+      });
+      var failSummarizer = false;
+      final inboxService = InboxService(
+        httpClient: MockClient((request) async {
+          requests.add(request.url);
+          return http.Response.bytes(utf8.encode(responseBody), 200);
+        }),
+        customSummarizer: (raw, sanitized, backend, model) async {
+          if (failSummarizer) throw StateError('요약 실패');
+          return InboxSummaryItem(
+            id: raw.id,
+            source: raw.source,
+            sender: raw.sender,
+            subject: raw.subject,
+            threeLineSummary: const ['1', '2', '3'],
+            requiredAction: '확인',
+            urgency: UrgencyLevel.medium,
+            summarizedByBackend: backend,
+            summarizedByModel: model,
+            forwardedSnippet: sanitized,
+            createdAt: DateTime.now(),
+          );
+        },
+      );
+      addTearDown(inboxService.dispose);
+
+      final first = await inboxService.fetchFromTelegramBotApi(
+        botToken: '123:abc',
+      );
+      expect(first.length, 2);
+      expect(first[0].sender, '주영 최');
+      expect(first[0].subject, 'Telegram 개인 메시지');
+      expect(first[1].sender, '봇 사용자');
+      expect(first[1].subject, 'Telegram 개발팀 메시지');
+      expect(first[1].forwardedSnippet, contains('배포 스크린샷'));
+      expect(requests.single.path, '/bot123:abc/getUpdates');
+      expect(requests.single.queryParameters.containsKey('offset'), isFalse);
+
+      // 다음 조회는 마지막 업데이트 다음부터, 요약 실패 시 offset 유지 후 재시도
+      failSummarizer = true;
+      responseBody = jsonEncode({
+        'ok': true,
+        'result': [
+          {
+            'update_id': 13,
+            'message': {'text': '재시도 대상'},
+          },
+        ],
+      });
+      await expectLater(
+        inboxService.fetchFromTelegramBotApi(botToken: '123:abc'),
+        throwsStateError,
+      );
+      expect(requests.last.queryParameters['offset'], '13');
+
+      failSummarizer = false;
+      final retried = await inboxService.fetchFromTelegramBotApi(
+        botToken: '123:abc',
+      );
+      expect(requests.last.queryParameters['offset'], '13');
+      expect(retried.single.sender, 'Telegram 사용자');
+
+      final afterRetry = await inboxService.fetchFromTelegramBotApi(
+        botToken: '123:abc',
+      );
+      expect(requests.last.queryParameters['offset'], '14');
+      expect(afterRetry, isEmpty); // 응답 고정 상태에서도 중복 요약 안 함
+    });
+
+    test('Telegram API 오류 응답과 HTTP 실패는 토큰을 노출하지 않는 예외로 처리한다', () async {
+      Future<void> expectFailure(http.Response response) async {
+        final inboxService = InboxService(
+          httpClient: MockClient((_) async => response),
+        );
+        addTearDown(inboxService.dispose);
+        await expectLater(
+          inboxService.fetchFromTelegramBotApi(botToken: 'secret-token'),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              isNot(contains('secret-token')),
+            ),
+          ),
+        );
+      }
+
+      await expectFailure(http.Response('{"ok":false}', 401));
+      await expectFailure(
+        http.Response('{"ok":false,"description":"Conflict"}', 200),
+      );
+    });
+
+    testWidgets('Telegram 수신 요약 테스트 버튼을 누르면 Telegram 요약 항목이 표시된다', (tester) async {
+      tester.view.physicalSize = const Size(1280, 800);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      final notificationService = NotificationService(enableOsPlugin: false);
+      final inboxService = InboxService(
+        notificationService: notificationService,
+      );
+      addTearDown(inboxService.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: InboxSummaryDialog(
+              inboxService: inboxService,
+              notificationService: notificationService,
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('simulate_telegram_button')));
+      await tester.pumpAndSettle();
+
+      expect(inboxService.summaries.single.source, InboxSourceType.telegram);
+      expect(find.textContaining('팀장님 (Telegram)'), findsWidgets);
     });
 
     testWidgets('푸시 알림 탭 시 딥링크로 Inbox 요약 상세 화면이 열리고 핵심 3줄과 모바일 설계안을 표시한다', (

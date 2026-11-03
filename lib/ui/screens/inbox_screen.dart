@@ -68,11 +68,12 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
       InboxMessageRaw(
         id: 'demo_${DateTime.now().millisecondsSinceEpoch}',
         source: source,
-        sender: source == InboxSourceType.gmail
-            ? 'security-team@company.com'
-            : (source == InboxSourceType.slack
-                  ? '@devops-lead'
-                  : '팀장님 (iMessage)'),
+        sender: switch (source) {
+          InboxSourceType.gmail => 'security-team@company.com',
+          InboxSourceType.slack => '@devops-lead',
+          InboxSourceType.telegram => '팀장님 (Telegram)',
+          _ => '팀장님 (iMessage)',
+        },
         subject: '[긴급] 프로덕션 배포 승인 요청 및 보안 점검 안내',
         body:
             '주영님, 오늘 오후 5시 프로덕션 릴리즈 전에 권한 센터 감사 로그 검토와 최종 배포 승인이 필요합니다. '
@@ -94,7 +95,7 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
           const Icon(Icons.mark_email_unread_outlined, color: Colors.tealAccent),
           const SizedBox(width: 8),
           const Expanded(
-            child: Text('Inbox 요약 센터 & 알림 (Gmail / Slack / Mail / iMessage)'),
+            child: Text('Inbox 요약 센터 & 알림 (Gmail / Slack / Telegram / Mail / iMessage)'),
           ),
           FilterChip(
             key: const ValueKey('toggle_mobile_relay_spec'),
@@ -234,6 +235,13 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                             _simulateIncomingMessage(InboxSourceType.imessage),
                         icon: const Icon(Icons.sms_outlined, size: 15),
                         label: const Text('iMessage 수신 요약 테스트'),
+                      ),
+                      FilledButton.tonalIcon(
+                        key: const ValueKey('simulate_telegram_button'),
+                        onPressed: () =>
+                            _simulateIncomingMessage(InboxSourceType.telegram),
+                        icon: const Icon(Icons.send_outlined, size: 15),
+                        label: const Text('Telegram 수신 요약 테스트'),
                       ),
                       Chip(
                         key: const ValueKey('kakaotalk_unsupported_chip'),

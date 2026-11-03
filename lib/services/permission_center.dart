@@ -110,6 +110,13 @@ class PermissionCenter extends ChangeNotifier {
         purpose: 'Inbox 요약을 위해 Slack 채널 및 DM 메시지를 읽기 전용으로 조회합니다.',
       ),
       AccountScopePermission(
+        id: 'telegram_bot',
+        backend: BackendType.antigravity,
+        providerName: 'Telegram Bot',
+        scopeName: 'BotFather 봇 토큰 (getUpdates)',
+        purpose: 'Inbox 요약을 위해 봇이 받은 Telegram 메시지를 조회합니다.',
+      ),
+      AccountScopePermission(
         id: 'agy_google_account',
         backend: BackendType.antigravity,
         providerName: 'Google Antigravity 계정',

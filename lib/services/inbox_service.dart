@@ -39,6 +39,13 @@ enum InboxSourceType {
     isSupported: true,
     supportNote: '~/Library/Messages/chat.db SQLite에서 최근 메시지를 읽기 전용으로 조회합니다.',
   ),
+  telegram(
+    id: 'telegram',
+    label: 'Telegram (공식 Bot API)',
+    requiredScope: 'BotFather 발급 봇 토큰 (getUpdates 읽기 전용)',
+    isSupported: true,
+    supportNote: '봇이 받은 메시지만 조회합니다. 개인 계정의 다른 대화는 Bot API로 읽을 수 없습니다.',
+  ),
   kakaoTalk(
     id: 'kakaotalk',
     label: '카카오톡 개인 채팅',
@@ -205,6 +212,7 @@ class InboxService extends ChangeNotifier {
   Duration _pollInterval = const Duration(seconds: 30);
   bool _isAutoMonitoring = false;
   DateTime? _lastCheckedAt;
+  int? _telegramUpdateOffset;
 
   BackendType get summaryBackend => _summaryBackend;
   String get summaryModel => _summaryModel;
@@ -311,7 +319,7 @@ class InboxService extends ChangeNotifier {
     }
   }
 
-  /// 사용자 권한이 허용된 모든 소스(Gmail, Slack, macOS Mail.app, iMessage)를 1회 스캔하여
+  /// 사용자 권한이 허용된 모든 소스(Gmail, Slack, Telegram, macOS Mail.app, iMessage)를 1회 스캔하여
   /// 아직 처리하지 않은 새 메일·메시지만 자동 요약 및 알림 발송합니다.
   Future<List<InboxSummaryItem>> pollAllAuthorizedSourcesOnce() async {
     _lastCheckedAt = DateTime.now();
@@ -377,6 +385,24 @@ class InboxService extends ChangeNotifier {
           );
           newlySummarized.addAll(items);
         } catch (_) {}
+      }
+
+      // 5. Telegram (권한 허용 + 키체인에 봇 토큰 존재 시)
+      final telegramScope = perms.accountScopes
+          .where((a) => a.id == 'telegram_bot')
+          .firstOrNull;
+      if (telegramScope != null &&
+          telegramScope.grantedScope != ApprovalScope.denied) {
+        final token = await perms.credentialVault.readBackendSecret(
+          backend: telegramScope.backend,
+          credentialName: telegramScope.id,
+        );
+        if (token != null && token.isNotEmpty) {
+          try {
+            final items = await fetchFromTelegramBotApi(botToken: token);
+            newlySummarized.addAll(items);
+          } catch (_) {}
+        }
       }
     }
 
@@ -606,6 +632,66 @@ class InboxService extends ChangeNotifier {
         ),
       );
       results.add(summary);
+    }
+    return results;
+  }
+
+  /// Telegram 공식 Bot API (`getUpdates`)에서 봇이 받은 새 메시지를 감지해 요약합니다.
+  /// 요약에 성공한 업데이트까지만 offset을 전진시켜 실패한 메시지는 다음 스캔에서 재시도합니다.
+  Future<List<InboxSummaryItem>> fetchFromTelegramBotApi({
+    required String botToken,
+    int limit = 20,
+  }) async {
+    final uri = Uri.https('api.telegram.org', '/bot$botToken/getUpdates', {
+      'limit': '$limit',
+      'allowed_updates': '["message"]',
+      if (_telegramUpdateOffset != null) 'offset': '$_telegramUpdateOffset',
+    });
+    final resp = await _httpClient.get(uri);
+    if (resp.statusCode != 200) {
+      throw StateError('Telegram API 호출 실패 (HTTP ${resp.statusCode})');
+    }
+    final decoded =
+        jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    if (decoded['ok'] != true) {
+      throw StateError('Telegram API 오류: ${decoded['description']}');
+    }
+    final updates = decoded['result'] as List<dynamic>? ?? const [];
+    final results = <InboxSummaryItem>[];
+    for (final update in updates) {
+      if (update is! Map || update['update_id'] is! int) continue;
+      final updateId = update['update_id'] as int;
+      final msgId = 'tg_$updateId';
+      final message = update['message'];
+      final text = message is Map
+          ? (message['text'] ?? message['caption'])?.toString() ?? ''
+          : '';
+      if (text.isNotEmpty &&
+          !isDuplicateMessage(InboxSourceType.telegram, msgId)) {
+        final from = message['from'];
+        final chat = message['chat'];
+        final name = from is Map
+            ? [from['first_name'], from['last_name']]
+                  .whereType<String>()
+                  .join(' ')
+            : '';
+        final chatTitle = chat is Map ? chat['title']?.toString() : null;
+        results.add(
+          await ingestAndSummarize(
+            InboxMessageRaw(
+              id: msgId,
+              source: InboxSourceType.telegram,
+              sender: name.isNotEmpty ? name : (chatTitle ?? 'Telegram 사용자'),
+              subject: chatTitle != null
+                  ? 'Telegram $chatTitle 메시지'
+                  : 'Telegram 개인 메시지',
+              body: text,
+              receivedAt: DateTime.now(),
+            ),
+          ),
+        );
+      }
+      _telegramUpdateOffset = updateId + 1;
     }
     return results;
   }
