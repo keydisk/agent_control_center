@@ -711,6 +711,39 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    testWidgets('저장된 이전 작업을 사이드바에서 열어 대화를 복원한다', (tester) async {
+      store.recordSession(
+        SessionSnapshot(
+          id: 'previous',
+          title: '이전 차트 작업',
+          backend: BackendType.claudeCode,
+          lastTurn: '사용자: 차트를 그려줘\n에이전트: 완료했습니다',
+          updatedAt: DateTime.now(),
+          workingDirectory: temp.path,
+        ),
+      );
+      manager.createSession(
+        sessionId: 'current',
+        title: '현재 작업',
+        backendOverride: _FakeBackend(),
+        workingDirectory: temp.path,
+      );
+      await pumpHome(tester);
+
+      expect(find.text('이전 작업'), findsOneWidget);
+      await tap(tester, 'saved_session_previous');
+
+      expect(manager.sessions, hasLength(2));
+      expect(manager.activeSession!.title, '이전 차트 작업');
+      expect(
+        manager.activeSession!.events
+            .whereType<MessageEvent>()
+            .where((event) => event.role != 'system'),
+        hasLength(2),
+      );
+      expect(manager.sessions.first.title, '현재 작업');
+    });
+
     testWidgets('그룹을 만들면 폴더를 신뢰하고 작업 세션 위에 표시한다', (tester) async {
       manager.createSession(
         sessionId: 'free',

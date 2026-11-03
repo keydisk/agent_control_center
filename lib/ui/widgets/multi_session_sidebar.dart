@@ -22,6 +22,8 @@ class MultiSessionSidebar extends StatelessWidget {
     required this.onRetrySession,
     required this.onRerunWithBackend,
     required this.onIsolateWorktree,
+    this.savedSessions = const [],
+    this.onOpenSavedSession,
     this.selectedDevice = TargetDeviceType.macosDesktop,
     this.onDeviceChanged,
     this.autoOrchestrateByAntigravity = true,
@@ -50,6 +52,8 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<String> onRetrySession;
   final void Function(String sessionId, BackendType backend) onRerunWithBackend;
   final ValueChanged<String> onIsolateWorktree;
+  final List<SessionSnapshot> savedSessions;
+  final ValueChanged<SessionSnapshot>? onOpenSavedSession;
   final TargetDeviceType selectedDevice;
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
   final bool autoOrchestrateByAntigravity;
@@ -159,6 +163,28 @@ class MultiSessionSidebar extends StatelessWidget {
                       .where((s) => !groupIds.contains(s.groupId))
                       .toList(),
                 ),
+                if (savedSessions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const _SidebarSectionLabel('이전 작업'),
+                  for (final snapshot in savedSessions)
+                    ListTile(
+                      key: ValueKey('saved_session_${snapshot.id}'),
+                      dense: true,
+                      visualDensity: VisualDensity.compact,
+                      leading: const Icon(Icons.history, size: 16),
+                      title: Text(
+                        snapshot.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text(
+                        snapshot.backend.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () => onOpenSavedSession?.call(snapshot),
+                    ),
+                ],
               ],
             ),
           ),

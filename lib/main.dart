@@ -389,6 +389,22 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     }
   }
 
+  Future<void> _openSavedSession(SessionSnapshot snapshot) async {
+    final session = _sessionManager.createSession(
+      title: snapshot.title,
+      backendType: snapshot.backend,
+      model: snapshot.model.isEmpty ? null : snapshot.model,
+      effort: snapshot.effort,
+      workingDirectory: snapshot.workingDirectory.isEmpty
+          ? Directory.current.path
+          : snapshot.workingDirectory,
+      groupId: _sessionManager.groups?.groupById(snapshot.groupId) == null
+          ? null
+          : snapshot.groupId,
+    );
+    await _sessionManager.loadSnapshot(session.sessionId, snapshot);
+  }
+
   Future<void> _openChildSessionDialog(String parentSessionId) async {
     final parent = _sessionById(parentSessionId);
     if (parent == null) return;
@@ -701,6 +717,15 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         if (_showSessionSidebar)
           MultiSessionSidebar(
             sessions: _sessionManager.sessions,
+            savedSessions: _sessionManager
+                .searchSavedSessions('', 50)
+                .where(
+                  (snapshot) => !_sessionManager.sessions.any(
+                    (session) => session.snapshotId == snapshot.id,
+                  ),
+                )
+                .toList(),
+            onOpenSavedSession: _openSavedSession,
             activeSessionId: _sessionManager.activeSessionId,
             usageByBackend: _sessionManager.usageByBackend,
             onSelectSession: _sessionManager.selectSession,
