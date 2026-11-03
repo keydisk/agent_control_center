@@ -9,10 +9,14 @@ class AntigravityEventParser {
     this.model = '',
   });
 
+  /// 헤드리스 모드가 자동 거부한 명령의 승인 요청 ID 접두어
+  static const deniedRequestPrefix = 'agy_denied_';
+
   final String sessionId;
   String model;
   String? conversationId;
   int _counter = 0;
+  bool _askedApprovalForDenial = false;
 
   String _nextId(String prefix) => '${prefix}_${sessionId}_${++_counter}';
 
@@ -99,6 +103,7 @@ class AntigravityEventParser {
       // 4. 도구 정보 추출
       Map<String, dynamic> toolArgs = {};
       String toolOutput = '';
+      String toolError = (step['error'] ?? '').toString();
       String toolName = (step['tool_name'] ?? stepType).toString();
       if (step['tool_info'] is Map) {
         final info = Map<String, dynamic>.from(step['tool_info'] as Map);
@@ -109,6 +114,12 @@ class AntigravityEventParser {
           toolArgs = Map<String, dynamic>.from(info['args'] as Map);
         }
         toolOutput = (info['output'] ?? info['result'] ?? '').toString();
+        final infoError = info['error'];
+        if (infoError != null) {
+          toolError = infoError is Map
+              ? (infoError['message'] ?? infoError).toString()
+              : infoError.toString();
+        }
       } else if (step['args'] is Map) {
         toolArgs = Map<String, dynamic>.from(step['args'] as Map);
       }
@@ -207,7 +218,7 @@ class AntigravityEventParser {
       }
 
       // 7. 일반 도구 호출 카드 이벤트
-      final isError = state == 'ERROR' || step['error'] != null;
+      final isError = state == 'ERROR' || toolError.isNotEmpty;
       events.add(
         ToolCallEvent(
           id: 'agy_tool_$stepIdx',
@@ -220,7 +231,7 @@ class AntigravityEventParser {
           result: toolOutput.isNotEmpty
               ? toolOutput
               : isError
-              ? (step['error']?.toString() ?? '실패')
+              ? (toolError.isNotEmpty ? toolError : '실패')
               : (state == 'DONE' ? '실행 완료' : '실행 중...'),
           isRunning: state == 'ACTIVE',
           isError: isError,
@@ -228,6 +239,38 @@ class AntigravityEventParser {
           rawLog: trimmed,
         ),
       );
+
+      // 헤드리스 모드는 권한을 묻지 못하고 거부하므로 앱에서 대신 묻습니다.
+      final command = toolArgs['CommandLine'];
+      if (toolName == 'run_command' &&
+          command is String &&
+          toolError.contains('denied permission')) {
+        _askedApprovalForDenial = true;
+        events.add(
+          ApprovalRequestEvent(
+            request: ApprovalRequestData(
+              id: '$deniedRequestPrefix$stepIdx',
+              sessionId: sessionId,
+              backend: BackendType.antigravity,
+              toolName: toolName,
+              arguments: toolArgs,
+              category: ApprovalRequestData.classifyTool(toolName, toolArgs),
+              reason: 'Antigravity가 이 명령의 실행 권한을 요청했습니다. 승인하면 작업을 이어갑니다.',
+              isDestructive: ApprovalRequestData.detectDestructive(
+                toolName,
+                toolArgs,
+              ),
+              createdAt: now,
+              targetResource: ApprovalRequestData.extractTargetResource(
+                toolName,
+                toolArgs,
+              ),
+            ),
+            model: model,
+            rawLog: trimmed,
+          ),
+        );
+      }
 
       // 8. 파일 변경 Diff 이벤트 추출
       if (step['file_diffs'] is List) {
@@ -314,6 +357,26 @@ class AntigravityEventParser {
       }
 
       final events = <AgentEvent>[];
+      // 승인으로 풀 수 없는 거부는 빈 응답으로 끝나므로 이유를 직접 알립니다.
+      final denied = res['denied_actions'];
+      if (denied is List && denied.isNotEmpty && !_askedApprovalForDenial) {
+        final names = denied
+            .map((d) => d is Map ? d['display_name'] ?? d['action'] : d)
+            .join(', ');
+        events.add(
+          MessageEvent(
+            id: _nextId('denied'),
+            sessionId: sessionId,
+            backend: BackendType.antigravity,
+            model: model,
+            timestamp: now,
+            role: 'system',
+            text: '권한이 거부되어 작업을 끝내지 못했습니다: $names. 원본 로그에서 거부된 도구를 확인해 주세요.',
+            rawLog: trimmed,
+          ),
+        );
+      }
+      _askedApprovalForDenial = false;
       if (status == 'ERROR' || errorMsg.isNotEmpty) {
         events.add(
           ErrorEvent(

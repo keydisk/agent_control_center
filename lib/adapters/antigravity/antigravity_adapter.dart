@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../core/backend/agent_backend.dart';
 import '../../core/backend/local_hook_bridge.dart';
@@ -31,6 +32,15 @@ class AntigravityAdapter implements AgentBackend {
   StreamSubscription<ApprovalRequestData>? _hookApprovalSub;
   AntigravityEventParser? _parser;
   AgentSessionConfig? _config;
+
+  /// 사용자의 답을 기다리는 자동 거부 명령 (요청 ID → 명령)
+  final Map<String, String> _deniedCommands = {};
+  final List<String> _newlyApprovedCommands = [];
+
+  // ponytail: 1회 승인도 이 프로세스가 끝날 때까지 유지됩니다. --settings는 시작할 때만 적용되기 때문입니다.
+  final Set<String> _allowedCommands = {};
+  DoneEvent? _heldDone;
+  TokenUsage _carriedUsage = const TokenUsage();
 
   @override
   BackendType get backendType => BackendType.antigravity;
@@ -83,6 +93,14 @@ class AntigravityAdapter implements AgentBackend {
         config.conversationId!,
       ],
       if (config.autoApproveBypassEnabled) '--dangerously-skip-permissions',
+      if (_allowedCommands.isNotEmpty) ...[
+        '--settings',
+        jsonEncode({
+          'permissions': {
+            'allow': [for (final c in _allowedCommands) 'command($c)'],
+          },
+        }),
+      ],
       ...config.extraArgs,
     ];
 
@@ -106,8 +124,53 @@ class AntigravityAdapter implements AgentBackend {
     if (parser == null) return;
     final parsed = parser.parseLine(line);
     for (final ev in parsed) {
+      if (ev is DoneEvent) {
+        _heldDone = ev;
+        unawaited(_settleTurn());
+        continue;
+      }
+      if (ev is ApprovalRequestEvent &&
+          ev.id.startsWith(AntigravityEventParser.deniedRequestPrefix)) {
+        _deniedCommands[ev.id] = ev.request.arguments['CommandLine'] as String;
+      }
       _eventsController.add(ev);
     }
+  }
+
+  /// 거부된 명령에 모두 답하면 승인된 명령으로 대화를 잇거나 턴을 끝냅니다.
+  Future<void> _settleTurn() async {
+    final done = _heldDone;
+    final cfg = _config;
+    if (done == null || cfg == null || _deniedCommands.isNotEmpty) return;
+    _heldDone = null;
+    final usage = _carriedUsage + done.usage;
+    final approved = List.of(_newlyApprovedCommands);
+    _newlyApprovedCommands.clear();
+    final conversationId = _parser?.conversationId;
+    if (approved.isEmpty || conversationId == null) {
+      _carriedUsage = const TokenUsage();
+      _eventsController.add(
+        DoneEvent(
+          id: done.id,
+          sessionId: done.sessionId,
+          backend: done.backend,
+          model: done.model,
+          timestamp: done.timestamp,
+          conversationId: done.conversationId,
+          usage: usage,
+          durationMs: done.durationMs,
+          stopReason: done.stopReason,
+          rawLog: done.rawLog,
+        ),
+      );
+      return;
+    }
+    _carriedUsage = usage;
+    await resume(conversationId, cfg);
+    await send(
+      '사용자가 다음 명령의 실행을 승인했습니다. 이 명령을 다시 실행하고 중단된 작업을 이어가세요.\n'
+      '${approved.map((c) => '- $c').join('\n')}',
+    );
   }
 
   void _onStderrLine(String line) {
@@ -177,7 +240,16 @@ class AntigravityAdapter implements AgentBackend {
 
   @override
   Future<void> respondToApproval(ApprovalDecision decision) async {
-    _hookBridge?.resolveApproval(decision);
+    final command = _deniedCommands.remove(decision.requestId);
+    if (command == null) {
+      _hookBridge?.resolveApproval(decision);
+      return;
+    }
+    if (decision.approved) {
+      _allowedCommands.add(command);
+      _newlyApprovedCommands.add(command);
+    }
+    await _settleTurn();
   }
 
   @override
@@ -192,7 +264,12 @@ class AntigravityAdapter implements AgentBackend {
   }
 
   @override
-  Future<void> interrupt() => _cleanupProcess();
+  Future<void> interrupt() {
+    _deniedCommands.clear();
+    _newlyApprovedCommands.clear();
+    _heldDone = null;
+    return _cleanupProcess();
+  }
 
   @override
   Future<void> resume(String conversationId, AgentSessionConfig config) async {
@@ -202,6 +279,7 @@ class AntigravityAdapter implements AgentBackend {
         backendType: config.backendType,
         workingDirectory: config.workingDirectory,
         model: config.model,
+        effort: config.effort,
         conversationId: conversationId,
         extraArgs: config.extraArgs,
         environment: config.environment,
