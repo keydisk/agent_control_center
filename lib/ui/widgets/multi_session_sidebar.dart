@@ -20,6 +20,9 @@ class MultiSessionSidebar extends StatelessWidget {
     this.onDeviceChanged,
     this.autoOrchestrateByAntigravity = true,
     this.onAutoOrchestrateChanged,
+    this.trustedFolderCount,
+    this.onManageTrustedFolders,
+    this.onMergeWorktree,
   });
 
   final List<ManagedSession> sessions;
@@ -35,6 +38,9 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
   final bool autoOrchestrateByAntigravity;
   final ValueChanged<bool>? onAutoOrchestrateChanged;
+  final int? trustedFolderCount;
+  final VoidCallback? onManageTrustedFolders;
+  final ValueChanged<String>? onMergeWorktree;
 
   Color _statusColor(SessionStatus status) {
     switch (status) {
@@ -142,6 +148,39 @@ class MultiSessionSidebar extends StatelessWidget {
               ],
             ),
           ),
+          if (trustedFolderCount != null) ...[
+            const Divider(height: 1),
+            InkWell(
+              key: const ValueKey('open_trusted_folders_button'),
+              onTap: onManageTrustedFolders,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    const Icon(
+                      Icons.verified_user_outlined,
+                      size: 14,
+                      color: Colors.greenAccent,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        '신뢰 폴더 ($trustedFolderCount)',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right, size: 14),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const Divider(height: 1),
           Expanded(
             child: ListView.builder(
@@ -335,6 +374,20 @@ class MultiSessionSidebar extends StatelessWidget {
                               ),
                             ),
                           ],
+                          for (final link in session.worktreeLinks) ...[
+                            const SizedBox(height: 6),
+                            _WorktreeLinkView(
+                              link: link,
+                              onMerge: identical(
+                                    link,
+                                    session.activeWorktreeLink,
+                                  )
+                                  ? () => onMergeWorktree?.call(
+                                      session.sessionId,
+                                    )
+                                  : null,
+                            ),
+                          ],
                           if (session.isolatedWorktreePath != null) ...[
                             const SizedBox(height: 4),
                             Text(
@@ -393,6 +446,95 @@ class MultiSessionSidebar extends StatelessWidget {
           ),
           const Divider(height: 1),
           _BackendUsageFooter(usageByBackend: usageByBackend),
+        ],
+      ),
+    );
+  }
+}
+
+/// 작업 브랜치에서 대상 브랜치로 이어지는 병합 연결 고리
+class _WorktreeLinkView extends StatelessWidget {
+  const _WorktreeLinkView({required this.link, this.onMerge});
+
+  final WorktreeLink link;
+  final VoidCallback? onMerge;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = link.isMerged ? Colors.greenAccent : Colors.lightBlueAccent;
+    const nameStyle = TextStyle(fontSize: 10.5, fontFamily: 'monospace');
+    return Container(
+      key: ValueKey('worktree_link_${link.branch}'),
+      padding: const EdgeInsets.all(6),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.5)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.call_split, size: 13, color: color),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Tooltip(
+                  message: link.branch,
+                  child: Text(
+                    link.branch,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: nameStyle,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          Row(
+            children: [
+              Icon(
+                link.isMerged ? Icons.call_merge : Icons.arrow_downward,
+                size: 13,
+                color: color,
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  link.baseBranch,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: nameStyle.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              if (link.isMerged)
+                Text(
+                  '병합됨 ${link.mergeCommit}',
+                  style: TextStyle(fontSize: 10, color: color),
+                )
+              else if (onMerge != null)
+                InkWell(
+                  key: ValueKey('merge_worktree_${link.branch}'),
+                  onTap: onMerge,
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    child: Text(
+                      '병합',
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.bold,
+                        decoration: TextDecoration.underline,
+                        color: Colors.lightBlueAccent,
+                      ),
+                    ),
+                  ),
+                )
+              else
+                const Text(
+                  '미병합',
+                  style: TextStyle(fontSize: 10, color: Colors.amber),
+                ),
+            ],
+          ),
         ],
       ),
     );

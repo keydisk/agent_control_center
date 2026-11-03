@@ -8,9 +8,11 @@ import 'core/models/agent_models.dart';
 import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
 import 'services/session_manager.dart';
+import 'services/trusted_folder_store.dart';
 import 'ui/screens/inbox_screen.dart';
 import 'ui/screens/permission_center_screen.dart';
 import 'ui/screens/skills_screen.dart';
+import 'ui/screens/trusted_folders_screen.dart';
 import 'ui/widgets/approval_and_question_dialogs.dart';
 import 'ui/widgets/multi_session_sidebar.dart';
 import 'ui/widgets/prompt_input_bar.dart';
@@ -89,7 +91,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       _sessionManager = widget.sessionManagerOverride!;
       _ownsSessionManager = false;
     } else {
+      // backendOverride는 주입 실행이므로 실제 폴더 신뢰·worktree 흐름을 적용하지 않습니다.
+      final guarded = widget.backendOverride == null;
       _sessionManager = SessionManager(
+        trustedFolders: guarded ? TrustedFolderStore.load() : null,
+        autoIsolateWithWorktree: guarded,
+        onFolderTrustRequired: _confirmFolderTrust,
         onApprovalRequired: (session, req) {
           _notificationService.notify(
             kind: NotificationKind.approvalRequested,
@@ -183,6 +190,44 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('작업 디렉터리 격리 실패: $error')));
     }
+  }
+
+  Future<void> _mergeWorktree(String sessionId) async {
+    try {
+      await _sessionManager.mergeSessionWorktree(sessionId);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('병합 실패: $error')));
+    }
+  }
+
+  Future<bool> _confirmFolderTrust(ManagedSession session) async {
+    if (!mounted) return false;
+    final trusted = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        key: const ValueKey('folder_trust_dialog'),
+        title: const Text('이 폴더를 신뢰할까요?'),
+        content: Text(
+          '에이전트가 다음 폴더의 파일을 읽고 수정하며 명령을 실행할 수 있습니다.\n\n'
+          '${session.workingDirectory}',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm_folder_trust_button'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('신뢰하고 실행'),
+          ),
+        ],
+      ),
+    );
+    return trusted ?? false;
   }
 
   void _onManagerChanged() {
@@ -369,6 +414,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 _sessionManager.rerunWithBackend(sessionId, backend);
               },
               onIsolateWorktree: _isolateSession,
+              onMergeWorktree: _mergeWorktree,
+              trustedFolderCount:
+                  _sessionManager.trustedFolders?.folders.length,
+              onManageTrustedFolders: () async {
+                await showDialog<void>(
+                  context: context,
+                  builder: (ctx) => TrustedFoldersDialog(
+                    store: _sessionManager.trustedFolders!,
+                  ),
+                );
+                setState(() {});
+              },
               selectedDevice: _selectedDevice,
               onDeviceChanged: (device) {
                 setState(() {
