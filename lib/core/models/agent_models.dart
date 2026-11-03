@@ -29,8 +29,6 @@ enum BackendType {
       'gemini-3.8-flash-low',
       'gemini-4-argon-medium',
       'gemini-4-argon-high',
-      'claude-sonnet-5-5-high',
-      'claude-opus-5-5-high',
     ],
     slashCommands: [
       '/help',

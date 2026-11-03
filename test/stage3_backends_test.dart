@@ -8,11 +8,48 @@ import 'package:agent_control_center/adapters/codex/codex_event_parser.dart';
 import 'package:agent_control_center/core/backend/agent_backend.dart';
 import 'package:agent_control_center/core/backend/backend_registry.dart';
 import 'package:agent_control_center/core/models/agent_models.dart';
+import 'package:agent_control_center/ui/widgets/prompt_input_bar.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'stage1_antigravity_test.dart';
 
 void main() {
+  group('Claude/Codex 모델은 전용 CLI로만 실행', () {
+    test('Antigravity 모델 목록에 Claude/GPT 모델이 없다', () {
+      expect(
+        BackendType.antigravity.availableModels.where(
+          (m) => m.startsWith('claude') || m.startsWith('gpt'),
+        ),
+        isEmpty,
+      );
+    });
+
+    testWidgets('Antigravity 모델 드롭다운에 Claude 모델이 표시되지 않는다', (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PromptInputBar(
+              selectedBackend: BackendType.antigravity,
+              selectedModel: BackendType.antigravity.defaultModel,
+              workingDirectory: '/tmp',
+              onBackendChanged: (_) {},
+              onModelChanged: (_) {},
+              onWorkingDirectoryChanged: (_) {},
+              onSubmit: (_, _) {},
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const ValueKey('model_dropdown')));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('gemini'), findsWidgets);
+      expect(find.textContaining('claude'), findsNothing);
+    });
+  });
+
   group('3단계: ClaudeCodeEventParser 및 ClaudeCodeAdapter 테스트 (fixture 기반)', () {
     test('claude_stream_sample.jsonl 을 파싱하여 승인, 스킬, 도구, Diff, 비용/토큰을 추출한다', () async {
       final lines = await File('test/fixtures/claude_stream_sample.jsonl')
