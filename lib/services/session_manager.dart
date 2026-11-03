@@ -118,6 +118,7 @@ class ManagedSession {
   String lastPrompt;
   List<String> lastAttachments;
   DateTime? turnStartedAt;
+  int turnEventStart = 0;
   TokenUsage usage;
   final List<AgentEvent> events;
   final List<String> rawLogs;
@@ -539,13 +540,31 @@ class SessionManager extends ChangeNotifier {
     bool notify = true,
   }) async {
     final parent = _sessions[child.parentSessionId];
-    if (parent == null || child.worktreeLinks.isEmpty) return;
-    final link = child.worktreeLinks.last;
-    var message = '${link.baseBranch}에 병합되었습니다 (${link.mergeCommit}).';
+    if (parent == null) return;
+    final link = child.worktreeLinks.lastOrNull;
+    if (link == null &&
+        !parent.events.whereType<ChildWorktreeEvent>().any(
+          (e) => e.childSessionId == child.sessionId,
+        )) {
+      return;
+    }
+    final reportedStatus = child.status;
+    final turnEventStart = child.turnEventStart;
+    final status = switch (reportedStatus) {
+      SessionStatus.completed => ChildWorktreeStatus.completed,
+      SessionStatus.failed => ChildWorktreeStatus.failed,
+      SessionStatus.stopped => ChildWorktreeStatus.stopped,
+      _ => ChildWorktreeStatus.running,
+    };
+    var message = link != null && link.isMerged
+        ? '${link.baseBranch}에 병합되었습니다 (${link.mergeCommit}).'
+        : '작업이 완료되었습니다.';
     var needsMerge = false;
     if (child.status == SessionStatus.failed) {
       message = '작업이 실패했습니다. 하위 세션을 확인해 주세요.';
-    } else if (!link.isMerged) {
+    } else if (child.status == SessionStatus.stopped) {
+      message = '작업이 중지되었습니다. 하위 세션에서 이어갈 수 있습니다.';
+    } else if (link != null && !link.isMerged) {
       final commits = await _gitOutput(link.worktreeRoot, [
         'rev-list',
         '--count',
@@ -563,11 +582,22 @@ class SessionManager extends ChangeNotifier {
           ? '${link.baseBranch} 병합이 필요합니다 (커밋 ${commits ?? '?'}개, 미커밋 파일 $fileCount개).'
           : '변경 사항이 없습니다. 필요 없으면 하위 세션을 삭제해 주세요.';
     }
-    final summary = child.events
-        .whereType<MessageEvent>()
-        .where((e) => e.role == 'assistant' && e.text.isNotEmpty)
-        .lastOrNull
-        ?.text;
+    // Git 조회 중 재시작되거나 삭제된 작업의 이전 결과는 반영하지 않습니다.
+    if (_sessions[parent.sessionId] != parent ||
+        _sessions[child.sessionId] != child ||
+        child.status != reportedStatus ||
+        child.turnEventStart != turnEventStart) {
+      return;
+    }
+    final turnEvents = child.events.skip(turnEventStart);
+    final summary =
+        turnEvents
+            .whereType<MessageEvent>()
+            .where((e) => e.role == 'assistant' && e.text.isNotEmpty)
+            .lastOrNull
+            ?.text ??
+        '';
+    final error = turnEvents.whereType<ErrorEvent>().lastOrNull?.message;
     parent.events
       ..removeWhere(
         (e) => e is ChildWorktreeEvent && e.childSessionId == child.sessionId,
@@ -582,13 +612,29 @@ class SessionManager extends ChangeNotifier {
           childSessionId: child.sessionId,
           childTitle: child.title,
           message: message,
-          summary: summary == null || summary.length <= 800
-              ? summary ?? ''
-              : '${summary.substring(0, 800)}…',
-          needsAttention: needsMerge || child.status == SessionStatus.failed,
+          status: status,
+          summary: error == null
+              ? summary
+              : [summary, error].where((text) => text.isNotEmpty).join('\n\n'),
+          needsAttention:
+              needsMerge ||
+              status == ChildWorktreeStatus.failed ||
+              status == ChildWorktreeStatus.stopped,
           canMerge: needsMerge,
         ),
       );
+    final hasRunningChild = _sessions.values.any(
+      (s) =>
+          s.parentSessionId == parent.sessionId &&
+          (s.status == SessionStatus.running ||
+              s.status == SessionStatus.awaitingApproval),
+    );
+    if (!hasRunningChild &&
+        parent.status != SessionStatus.running &&
+        parent.status != SessionStatus.awaitingApproval) {
+      parent.status = reportedStatus;
+    }
+    _recordSnapshot(parent);
     notifyListeners();
     if (notify) onChildWorktreeFinished?.call(parent, child, message);
   }
@@ -601,6 +647,7 @@ class SessionManager extends ChangeNotifier {
     String? systemInstructionPrefix,
   ) async {
     final child = createChildSession(parent.sessionId, makeActive: false);
+    parent.status = SessionStatus.idle;
     final now = DateTime.now();
     parent.events.addAll([
       MessageEvent(
@@ -981,6 +1028,7 @@ class SessionManager extends ChangeNotifier {
 
     session.lastPrompt = prompt;
     session.lastAttachments = List.of(attachments);
+    session.turnEventStart = session.events.length;
     try {
       await _ensureFolderTrusted(session);
       final shouldIsolate =
@@ -1087,6 +1135,7 @@ class SessionManager extends ChangeNotifier {
       );
       _refreshAllConflictFlags();
       notifyListeners();
+      await _reportToParent(session);
     }
   }
 
@@ -1228,6 +1277,7 @@ class SessionManager extends ChangeNotifier {
     _recordSnapshot(session);
     _refreshAllConflictFlags();
     notifyListeners();
+    await _reportToParent(session, notify: false);
   }
 
   /// 중지된 턴의 도구 카드와 대기 중인 요청이 실행 중으로 남지 않게 정리합니다.

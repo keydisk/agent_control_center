@@ -493,6 +493,11 @@ void main() {
       await _settle();
       expect(notices.single, contains('변경 사항이 없습니다'));
       expect(parent.childAttentionCount, 0);
+      expect(parent.status, SessionStatus.completed);
+      expect(
+        parent.events.whereType<ChildWorktreeEvent>().single.status,
+        ChildWorktreeStatus.completed,
+      );
 
       // 변경이 생기면 병합이 필요하다고 알리고 같은 하위 세션의 알림을 교체한다.
       await File('${link.worktreeRoot}/feature.txt').writeAsString('x\n');
@@ -514,6 +519,69 @@ void main() {
       );
       expect(notices, hasLength(2), reason: '직접 병합은 다시 알리지 않는다');
       expect(File('${repo.path}/feature.txt').existsSync(), isTrue);
+    });
+
+    test('격리 실패도 요청한 세션에 실패 원인과 상태를 표시한다', () async {
+      final repo = await _createRepo();
+      final manager = SessionManager(
+        registry: _registry([]),
+        autoIsolateWithWorktree: true,
+        worktreeAllocator: (_, _) async => throw StateError('worktree 생성 실패'),
+      );
+      addTearDown(manager.dispose);
+      final parent = manager.createSession(workingDirectory: repo.path);
+
+      await manager.sendPrompt(parent.sessionId, '기능 추가');
+
+      expect(parent.status, SessionStatus.failed);
+      final notice = parent.events.whereType<ChildWorktreeEvent>().single;
+      expect(notice.status, ChildWorktreeStatus.failed);
+      expect(notice.summary, contains('worktree 생성 실패'));
+      expect(notice.needsAttention, isTrue);
+      expect(notice.canMerge, isFalse);
+    });
+
+    test('다른 하위 작업과 직접 실행 중인 요청의 상태를 완료로 덮지 않는다', () async {
+      final repo = await _createRepo();
+      final created = <_FakeBackend>[];
+      final manager = SessionManager(
+        registry: _registry(created),
+        autoIsolateWithWorktree: true,
+        worktreeAllocator: (dir, _) async => dir,
+      );
+      addTearDown(manager.dispose);
+      final parent = manager.createSession(
+        backendOverride: _FakeBackend(),
+        workingDirectory: repo.path,
+      );
+      await manager.sendPrompt(parent.sessionId, '첫 작업');
+      await manager.sendPrompt(parent.sessionId, '둘째 작업');
+      final result = '${List.filled(900, '결').join()}\n마지막 결과';
+      created.first.finishTurn(result);
+      await _settle();
+
+      expect(parent.status, SessionStatus.idle);
+      expect(
+        parent.events.whereType<ChildWorktreeEvent>().last.summary,
+        result,
+      );
+      await manager.stopSession(manager.sessions.last.sessionId);
+      expect(parent.status, SessionStatus.stopped);
+      final stopped = parent.events.whereType<ChildWorktreeEvent>().last;
+      expect(stopped.status, ChildWorktreeStatus.stopped);
+      expect(stopped.summary, isEmpty);
+      expect(stopped.canMerge, isFalse);
+
+      final child = manager.sessions.last;
+      await manager.retrySession(child.sessionId);
+      parent.status = SessionStatus.running;
+      created.last.finishTurn('재시도 결과');
+      await _settle();
+      expect(parent.status, SessionStatus.running);
+      expect(
+        parent.events.whereType<ChildWorktreeEvent>().last.status,
+        ChildWorktreeStatus.completed,
+      );
     });
 
     test('다음 프롬프트는 새 하위 세션으로 가고 이전 결과를 컨텍스트로 받는다', () async {
@@ -588,6 +656,9 @@ void main() {
       expect(parent.childAttentionCount, 1);
       final notice = parent.events.whereType<ChildWorktreeEvent>().single;
       expect(notice.message, contains('실패'));
+      expect(notice.status, ChildWorktreeStatus.failed);
+      expect(notice.summary, '오류');
+      expect(parent.status, SessionStatus.failed);
       expect(notice.canMerge, isFalse);
     });
   });
@@ -828,6 +899,8 @@ void main() {
           childSessionId: 'kid',
           childTitle: '하위 작업',
           message: 'develop 병합이 필요합니다',
+          status: ChildWorktreeStatus.completed,
+          summary: '첫째 줄\n둘째 줄\n셋째 줄\n넷째 줄\n마지막 결과',
           needsAttention: true,
           canMerge: true,
         ),
@@ -835,8 +908,13 @@ void main() {
       manager.selectSession('root');
       await pumpHome(tester);
 
-      expect(find.byKey(const ValueKey('session_attention_root')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('session_attention_root')),
+        findsOneWidget,
+      );
       expect(find.byKey(const ValueKey('merge_child_kid')), findsOneWidget);
+      expect(find.text('작업 완료'), findsOneWidget);
+      expect(find.textContaining('마지막 결과'), findsOneWidget);
       await tap(tester, 'open_child_kid');
       expect(manager.activeSessionId, 'kid');
     });
