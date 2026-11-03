@@ -27,6 +27,79 @@ String describeAgentActivity(
       : '생각 중';
 }
 
+/// 하위 세션의 worktree 작업 결과와 사용자가 할 일을 상위 세션에 표시합니다.
+class ChildWorktreeNotice extends StatelessWidget {
+  const ChildWorktreeNotice({
+    super.key,
+    required this.event,
+    required this.onOpen,
+    required this.onMerge,
+  });
+
+  final ChildWorktreeEvent event;
+  final VoidCallback onOpen;
+  final VoidCallback onMerge;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    final color = event.needsAttention ? mac.orange : mac.blue;
+    return Container(
+      key: ValueKey('child_notice_${event.childSessionId}'),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.call_split, size: 15, color: color),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  event.childTitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              TextButton(
+                key: ValueKey('open_child_${event.childSessionId}'),
+                onPressed: onOpen,
+                child: const Text('열기'),
+              ),
+              if (event.canMerge)
+                FilledButton.tonal(
+                  key: ValueKey('merge_child_${event.childSessionId}'),
+                  onPressed: onMerge,
+                  child: const Text('병합'),
+                ),
+            ],
+          ),
+          Text(event.message, style: const TextStyle(fontSize: 12)),
+          if (event.summary.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                event.summary,
+                maxLines: 4,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11.5, color: mac.secondaryLabel),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
 /// CLI 상태 줄처럼 현재 활동, 경과 시간, 중지 방법을 표시합니다.
 class AgentActivityBar extends StatefulWidget {
   const AgentActivityBar({

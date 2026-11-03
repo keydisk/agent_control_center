@@ -6,6 +6,7 @@ import '../../core/models/agent_models.dart';
 import '../../services/effort_preference_store.dart';
 import '../../services/session_manager.dart';
 import '../../services/trusted_folder_store.dart';
+import '../../services/workspace_group_store.dart';
 import '../theme/mac_theme.dart';
 
 Future<String?> pickFolderInFinder(String prompt) async {
@@ -22,12 +23,18 @@ class NewSessionRequest {
     required this.model,
     required this.effort,
     required this.folder,
+    this.instructions = '',
+    this.continueFrom,
   });
 
   final BackendType backend;
   final String model;
   final ReasoningEffort effort;
   final String folder;
+  final String instructions;
+
+  /// 마지막 작업을 이어받을 이전 세션. null이면 새로 시작합니다.
+  final SessionSnapshot? continueFrom;
 }
 
 class SessionSettingsResult {
@@ -36,9 +43,11 @@ class SessionSettingsResult {
     required this.backend,
     required this.effort,
     required this.folder,
+    this.instructions = '',
     this.model,
   });
 
+  final String instructions;
   final String title;
   final BackendType backend;
 
@@ -52,6 +61,7 @@ class _FolderField extends StatelessWidget {
   const _FolderField({
     required this.controller,
     required this.fieldKey,
+    this.label = '작업 폴더',
     this.enabled = true,
     this.errorText,
     this.onChanged,
@@ -59,6 +69,7 @@ class _FolderField extends StatelessWidget {
 
   final TextEditingController controller;
   final Key fieldKey;
+  final String label;
   final bool enabled;
   final String? errorText;
   final ValueChanged<String>? onChanged;
@@ -75,7 +86,7 @@ class _FolderField extends StatelessWidget {
             enabled: enabled,
             onChanged: onChanged,
             decoration: InputDecoration(
-              labelText: '작업 폴더',
+              labelText: label,
               errorText: errorText,
               errorMaxLines: 3,
             ),
@@ -97,6 +108,37 @@ class _FolderField extends StatelessWidget {
           ),
         ],
       ],
+    );
+  }
+}
+
+class _InstructionsField extends StatelessWidget {
+  const _InstructionsField({
+    required this.controller,
+    required this.fieldKey,
+    required this.label,
+    this.helper,
+  });
+
+  final TextEditingController controller;
+  final Key fieldKey;
+  final String label;
+  final String? helper;
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      key: fieldKey,
+      controller: controller,
+      minLines: 2,
+      maxLines: 5,
+      style: const TextStyle(fontSize: 13),
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+        helperMaxLines: 2,
+        alignLabelWithHint: true,
+      ),
     );
   }
 }
@@ -218,8 +260,18 @@ class NewSessionDialog extends StatefulWidget {
     this.initialEffort = ReasoningEffort.auto,
     this.trustedFolders,
     this.effortPreferences,
+    this.title = '새 세션',
+    this.note,
+    this.showInstructions = false,
+    this.initialInstructions = '',
+    this.previousSessions = const [],
   });
 
+  final String title;
+  final String? note;
+  final bool showInstructions;
+  final String initialInstructions;
+  final List<SessionSnapshot> previousSessions;
   final BackendType initialBackend;
   final String? initialModel;
   final ReasoningEffort initialEffort;
@@ -233,6 +285,10 @@ class NewSessionDialog extends StatefulWidget {
 
 class _NewSessionDialogState extends State<NewSessionDialog> {
   late final _folderCtrl = TextEditingController(text: widget.initialFolder);
+  late final _instructionsCtrl = TextEditingController(
+    text: widget.initialInstructions,
+  );
+  SessionSnapshot? _continueFrom;
   late BackendType _backend = widget.initialBackend;
   late String _model =
       _backend.availableModels.contains(
@@ -249,6 +305,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
   @override
   void dispose() {
     _folderCtrl.dispose();
+    _instructionsCtrl.dispose();
     super.dispose();
   }
 
@@ -270,6 +327,8 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
         model: _model,
         effort: _effort,
         folder: folder,
+        instructions: _instructionsCtrl.text.trim(),
+        continueFrom: _continueFrom,
       ),
     );
   }
@@ -278,7 +337,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
   Widget build(BuildContext context) {
     return AlertDialog(
       key: const ValueKey('new_session_dialog'),
-      title: const Text('새 세션'),
+      title: Text(widget.title),
       content: SizedBox(
         width: 460,
         child: Column(
@@ -322,6 +381,51 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
                 ),
               ),
             ],
+            if (widget.showInstructions) ...[
+              const SizedBox(height: 12),
+              _InstructionsField(
+                fieldKey: const ValueKey('new_session_instructions'),
+                controller: _instructionsCtrl,
+                label: '세션별 지침 (선택)',
+              ),
+            ],
+            if (widget.previousSessions.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<SessionSnapshot?>(
+                key: const ValueKey('new_session_continue'),
+                initialValue: null,
+                isExpanded: true,
+                isDense: true,
+                borderRadius: BorderRadius.circular(8),
+                decoration: const InputDecoration(labelText: '이전 세션 이어가기'),
+                items: [
+                  const DropdownMenuItem(
+                    value: null,
+                    child: Text('새로 시작', style: TextStyle(fontSize: 13)),
+                  ),
+                  for (final s in widget.previousSessions)
+                    DropdownMenuItem(
+                      value: s,
+                      child: Text(
+                        '${s.title} · 마지막 작업만 가져오기',
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13),
+                      ),
+                    ),
+                ],
+                onChanged: (s) => setState(() => _continueFrom = s),
+              ),
+            ],
+            if (widget.note != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                widget.note!,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: context.mac.secondaryLabel,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -334,6 +438,192 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
           key: const ValueKey('create_session_button'),
           onPressed: _create,
           child: const Text('만들기'),
+        ),
+      ],
+    );
+  }
+}
+
+class WorkspaceGroupResult {
+  const WorkspaceGroupResult({
+    required this.group,
+    required this.defaultInstructions,
+  });
+
+  final WorkspaceGroup group;
+  final String defaultInstructions;
+}
+
+/// 작업 그룹의 신뢰 폴더, 세션 기본 설정, 지침을 만들거나 고칩니다.
+class WorkspaceGroupDialog extends StatefulWidget {
+  const WorkspaceGroupDialog({
+    super.key,
+    required this.defaultInstructions,
+    required this.initialFolder,
+    this.group,
+    this.trustedFolders,
+    this.effortPreferences,
+  });
+
+  final WorkspaceGroup? group;
+  final String defaultInstructions;
+  final String initialFolder;
+  final TrustedFolderStore? trustedFolders;
+  final EffortPreferenceStore? effortPreferences;
+
+  @override
+  State<WorkspaceGroupDialog> createState() => _WorkspaceGroupDialogState();
+}
+
+class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
+  late final _nameCtrl = TextEditingController(text: widget.group?.name);
+  late final _folderCtrl = TextEditingController(
+    text: widget.group?.folder ?? widget.initialFolder,
+  );
+  late final _defaultCtrl = TextEditingController(
+    text: widget.defaultInstructions,
+  );
+  late final _extraCtrl = TextEditingController(
+    text: widget.group?.instructions,
+  );
+  late BackendType _backend = widget.group?.backend ?? BackendType.antigravity;
+  late String _model = widget.group?.model ?? _backend.defaultModel;
+  late ReasoningEffort _effort =
+      widget.group?.effort ??
+      widget.effortPreferences?.effortFor(_backend) ??
+      _backend.defaultEffort;
+  late bool _useDefault = widget.group?.useDefaultInstructions ?? true;
+  String? _nameError;
+  String? _folderError;
+
+  @override
+  void dispose() {
+    _nameCtrl.dispose();
+    _folderCtrl.dispose();
+    _defaultCtrl.dispose();
+    _extraCtrl.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final name = _nameCtrl.text.trim();
+    final folder = _folderCtrl.text.trim();
+    setState(() {
+      _nameError = name.isEmpty ? '그룹 이름을 입력해 주세요.' : null;
+      _folderError = Directory(folder).existsSync() ? null : '존재하지 않는 폴더입니다.';
+    });
+    if (_nameError != null || _folderError != null) return;
+    try {
+      widget.trustedFolders?.add(folder);
+    } on StateError catch (e) {
+      setState(() => _folderError = e.message);
+      return;
+    }
+    Navigator.of(context).pop(
+      WorkspaceGroupResult(
+        defaultInstructions: _defaultCtrl.text.trim(),
+        group: WorkspaceGroup(
+          id:
+              widget.group?.id ??
+              'group_${DateTime.now().microsecondsSinceEpoch}',
+          name: name,
+          folder: folder,
+          backend: _backend,
+          model: _model,
+          effort: _effort,
+          useDefaultInstructions: _useDefault,
+          instructions: _extraCtrl.text.trim(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      key: const ValueKey('workspace_group_dialog'),
+      title: Text(widget.group == null ? '작업 그룹 만들기' : '작업 그룹 설정'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              TextField(
+                key: const ValueKey('group_name'),
+                controller: _nameCtrl,
+                decoration: InputDecoration(
+                  labelText: '그룹 이름',
+                  errorText: _nameError,
+                ),
+              ),
+              const SizedBox(height: 12),
+              _FolderField(
+                fieldKey: const ValueKey('group_folder'),
+                controller: _folderCtrl,
+                label: '신뢰 폴더',
+                errorText: _folderError,
+              ),
+              const SizedBox(height: 12),
+              _BackendDropdown(
+                value: _backend,
+                onChanged: (b) => setState(() {
+                  _backend = b;
+                  _model = b.defaultModel;
+                  _effort =
+                      widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
+                }),
+              ),
+              const SizedBox(height: 12),
+              _ModelDropdown(
+                backend: _backend,
+                value: _model,
+                onChanged: (m) => setState(() => _model = m),
+              ),
+              const SizedBox(height: 12),
+              _EffortDropdown(
+                backend: _backend,
+                value: _effort,
+                onChanged: (e) => setState(() => _effort = e),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                key: const ValueKey('group_use_default_instructions'),
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _useDefault,
+                title: const Text('기본 지침 사용'),
+                onChanged: (v) => setState(() => _useDefault = v ?? false),
+              ),
+              if (_useDefault) ...[
+                _InstructionsField(
+                  fieldKey: const ValueKey('group_default_instructions'),
+                  controller: _defaultCtrl,
+                  label: '기본 지침',
+                  helper: '기본 지침을 쓰는 모든 그룹에 함께 적용됩니다.',
+                ),
+                const SizedBox(height: 12),
+              ],
+              _InstructionsField(
+                fieldKey: const ValueKey('group_extra_instructions'),
+                controller: _extraCtrl,
+                label: _useDefault ? '추가 지침 (선택)' : '그룹 지침 (선택)',
+                helper: '세션별 지침은 세션을 만들 때나 세션 환경 설정에서 정합니다.',
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          key: const ValueKey('save_group_button'),
+          onPressed: _save,
+          child: const Text('저장'),
         ),
       ],
     );
@@ -361,6 +651,9 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
   late final _titleCtrl = TextEditingController(text: widget.session.title);
   late final _folderCtrl = TextEditingController(
     text: widget.session.workingDirectory,
+  );
+  late final _instructionsCtrl = TextEditingController(
+    text: widget.session.instructions,
   );
   late BackendType _backend = widget.session.backendType;
   late final String _initialModel =
@@ -391,6 +684,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
   void dispose() {
     _titleCtrl.dispose();
     _folderCtrl.dispose();
+    _instructionsCtrl.dispose();
     super.dispose();
   }
 
@@ -424,6 +718,7 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
             : null,
         effort: _effort,
         folder: folder,
+        instructions: _instructionsCtrl.text.trim(),
       ),
     );
   }
@@ -499,6 +794,13 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
                 onChanged: (v) => setState(() => _trusted = v),
               ),
             ],
+            const SizedBox(height: 12),
+            _InstructionsField(
+              fieldKey: const ValueKey('session_settings_instructions'),
+              controller: _instructionsCtrl,
+              label: '세션별 지침 (선택)',
+              helper: '다음 프롬프트부터 적용됩니다.',
+            ),
           ],
         ),
       ),

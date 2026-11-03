@@ -103,6 +103,7 @@ void main() {
         sessionId: 'clean',
         backendOverride: _FakeBackend(),
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
       await manager.sendPrompt(clean.sessionId, '요청');
       final cleanRoot = clean.activeWorktreeLink!.worktreeRoot;
@@ -114,6 +115,7 @@ void main() {
         sessionId: 'dirty',
         backendOverride: _FakeBackend(),
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
       await manager.sendPrompt(dirty.sessionId, '요청');
       final link = dirty.activeWorktreeLink!;

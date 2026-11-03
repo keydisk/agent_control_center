@@ -4,6 +4,7 @@ import '../theme/mac_theme.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/session_manager.dart';
+import '../../services/workspace_group_store.dart';
 import 'mac_window_drag_area.dart';
 import 'timeline_widgets.dart';
 
@@ -28,6 +29,12 @@ class MultiSessionSidebar extends StatelessWidget {
     this.onMergeWorktree,
     this.onSessionSettings,
     this.onDeleteSession,
+    this.groups,
+    this.onNewGroup,
+    this.onNewSessionInGroup,
+    this.onEditGroup,
+    this.onDeleteGroup,
+    this.onNewChildSession,
   });
 
   final List<ManagedSession> sessions;
@@ -51,9 +58,56 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<String>? onSessionSettings;
   final ValueChanged<String>? onDeleteSession;
 
+  /// null이면 작업 그룹 영역을 표시하지 않습니다.
+  final List<WorkspaceGroup>? groups;
+  final VoidCallback? onNewGroup;
+  final ValueChanged<String>? onNewSessionInGroup;
+  final ValueChanged<String>? onEditGroup;
+  final ValueChanged<String>? onDeleteGroup;
+  final ValueChanged<String>? onNewChildSession;
+
+  /// 상위 세션 바로 아래에 하위 세션이 오도록 펼칩니다.
+  static List<(ManagedSession, int)> _flattenTree(
+    List<ManagedSession> sessions,
+  ) {
+    final ids = {for (final s in sessions) s.sessionId};
+    final result = <(ManagedSession, int)>[];
+    void visit(ManagedSession session, int depth) {
+      result.add((session, depth));
+      for (final child in sessions) {
+        if (child.parentSessionId == session.sessionId) visit(child, depth + 1);
+      }
+    }
+
+    for (final session in sessions) {
+      if (!ids.contains(session.parentSessionId)) visit(session, 0);
+    }
+    return result;
+  }
+
+  List<Widget> _sessionRows(List<ManagedSession> sessions) => [
+    for (final (session, depth) in _flattenTree(sessions))
+      _SessionRow(
+        session: session,
+        depth: depth,
+        isSelected: session.sessionId == activeSessionId,
+        onSelect: () => onSelectSession(session.sessionId),
+        onStop: () => onStopSession(session.sessionId),
+        onRetry: () => onRetrySession(session.sessionId),
+        onRerun: (b) => onRerunWithBackend(session.sessionId, b),
+        onIsolate: () => onIsolateWorktree(session.sessionId),
+        onMerge: () => onMergeWorktree?.call(session.sessionId),
+        onNewSession: () => onNewSession(session.sessionId),
+        onNewChild: () => onNewChildSession?.call(session.sessionId),
+        onSettings: () => onSessionSettings?.call(session.sessionId),
+        onDelete: () => onDeleteSession?.call(session.sessionId),
+      ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final mac = context.mac;
+    final groupIds = {for (final g in groups ?? const []) g.id};
     return Container(
       width: 260,
       color: mac.sidebar,
@@ -79,27 +133,31 @@ class MultiSessionSidebar extends StatelessWidget {
               ),
             ),
           ),
-          const _SidebarSectionLabel('작업 세션'),
           Expanded(
-            child: ListView.builder(
+            child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              itemCount: sessions.length,
-              itemBuilder: (context, index) {
-                final session = sessions[index];
-                return _SessionRow(
-                  session: session,
-                  isSelected: session.sessionId == activeSessionId,
-                  onSelect: () => onSelectSession(session.sessionId),
-                  onStop: () => onStopSession(session.sessionId),
-                  onRetry: () => onRetrySession(session.sessionId),
-                  onRerun: (b) => onRerunWithBackend(session.sessionId, b),
-                  onIsolate: () => onIsolateWorktree(session.sessionId),
-                  onMerge: () => onMergeWorktree?.call(session.sessionId),
-                  onNewSession: () => onNewSession(session.sessionId),
-                  onSettings: () => onSessionSettings?.call(session.sessionId),
-                  onDelete: () => onDeleteSession?.call(session.sessionId),
-                );
-              },
+              children: [
+                if (groups != null) ...[
+                  _GroupSectionHeader(onNewGroup: onNewGroup),
+                  for (final group in groups!)
+                    _GroupTile(
+                      group: group,
+                      onNewSession: () => onNewSessionInGroup?.call(group.id),
+                      onEdit: () => onEditGroup?.call(group.id),
+                      onDelete: () => onDeleteGroup?.call(group.id),
+                      children: _sessionRows(
+                        sessions.where((s) => s.groupId == group.id).toList(),
+                      ),
+                    ),
+                  const SizedBox(height: 8),
+                ],
+                const _SidebarSectionLabel('작업 세션'),
+                ..._sessionRows(
+                  sessions
+                      .where((s) => !groupIds.contains(s.groupId))
+                      .toList(),
+                ),
+              ],
             ),
           ),
           const Divider(),
@@ -183,6 +241,114 @@ class MultiSessionSidebar extends StatelessWidget {
   }
 }
 
+class _GroupSectionHeader extends StatelessWidget {
+  const _GroupSectionHeader({required this.onNewGroup});
+
+  final VoidCallback? onNewGroup;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Expanded(child: _SidebarSectionLabel('작업 그룹')),
+        IconButton(
+          key: const ValueKey('new_group_button'),
+          tooltip: '작업 그룹 만들기',
+          onPressed: onNewGroup,
+          icon: const Icon(Icons.create_new_folder_outlined, size: 15),
+        ),
+      ],
+    );
+  }
+}
+
+/// 접고 펼칠 수 있는 작업 그룹 한 줄과 그 안의 세션들
+class _GroupTile extends StatelessWidget {
+  const _GroupTile({
+    required this.group,
+    required this.onNewSession,
+    required this.onEdit,
+    required this.onDelete,
+    required this.children,
+  });
+
+  final WorkspaceGroup group;
+  final VoidCallback onNewSession;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  final List<Widget> children;
+
+  Future<void> _showContextMenu(BuildContext context, Offset position) async {
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final action = await showMenu<VoidCallback>(
+      context: context,
+      position: RelativeRect.fromRect(
+        position & Size.zero,
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        PopupMenuItem(height: 28, value: onNewSession, child: const Text('새 세션')),
+        PopupMenuItem(
+          key: const ValueKey('group_menu_settings'),
+          height: 28,
+          value: onEdit,
+          child: const Text('그룹 설정'),
+        ),
+        const PopupMenuDivider(height: 8),
+        PopupMenuItem(
+          key: const ValueKey('group_menu_delete'),
+          height: 28,
+          value: onDelete,
+          child: Text('삭제', style: TextStyle(color: context.mac.red)),
+        ),
+      ],
+    );
+    action?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    return GestureDetector(
+      onSecondaryTapDown: (details) =>
+          _showContextMenu(context, details.globalPosition),
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          key: ValueKey('group_tile_${group.id}'),
+          initiallyExpanded: true,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          controlAffinity: ListTileControlAffinity.leading,
+          tilePadding: const EdgeInsets.only(left: 4),
+          childrenPadding: EdgeInsets.zero,
+          minTileHeight: 30,
+          title: Tooltip(
+            message: '신뢰 폴더: ${group.folder}',
+            child: Text(
+              group.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+                color: mac.label,
+              ),
+            ),
+          ),
+          trailing: IconButton(
+            key: ValueKey('new_session_in_group_${group.id}'),
+            tooltip: '이 그룹에 새 세션',
+            onPressed: onNewSession,
+            icon: const Icon(Icons.add, size: 15),
+          ),
+          children: children,
+        ),
+      ),
+    );
+  }
+}
+
 class _SidebarSectionLabel extends StatelessWidget {
   const _SidebarSectionLabel(this.text);
 
@@ -247,6 +413,7 @@ class _SidebarSettingRow extends StatelessWidget {
 class _SessionRow extends StatelessWidget {
   const _SessionRow({
     required this.session,
+    required this.depth,
     required this.isSelected,
     required this.onSelect,
     required this.onStop,
@@ -255,11 +422,14 @@ class _SessionRow extends StatelessWidget {
     required this.onIsolate,
     required this.onMerge,
     required this.onNewSession,
+    required this.onNewChild,
     required this.onSettings,
     required this.onDelete,
   });
 
   final ManagedSession session;
+  final int depth;
+  final VoidCallback onNewChild;
   final bool isSelected;
   final VoidCallback onSelect;
   final VoidCallback onStop;
@@ -286,6 +456,12 @@ class _SessionRow extends StatelessWidget {
           height: 28,
           value: onNewSession,
           child: const Text('새 세션'),
+        ),
+        PopupMenuItem(
+          key: const ValueKey('session_menu_child'),
+          height: 28,
+          value: onNewChild,
+          child: const Text('하위 세션'),
         ),
         PopupMenuItem(
           key: const ValueKey('session_menu_settings'),
@@ -331,7 +507,11 @@ class _SessionRow extends StatelessWidget {
 
     return Padding(
       key: ValueKey('session_card_${session.sessionId}'),
-      padding: const EdgeInsets.only(bottom: 2),
+      // 깊이가 깊어도 세션 이름이 보이도록 들여쓰기 폭을 제한합니다.
+      padding: EdgeInsets.only(
+        bottom: 2,
+        left: (depth > 3 ? 3 : depth) * 12.0,
+      ),
       child: GestureDetector(
         onSecondaryTapDown: (details) =>
             _showContextMenu(context, details.globalPosition),
@@ -348,6 +528,15 @@ class _SessionRow extends StatelessWidget {
                 children: [
                   Row(
                     children: [
+                      if (depth > 0) ...[
+                        Icon(
+                          Icons.subdirectory_arrow_right,
+                          key: ValueKey('session_child_${session.sessionId}'),
+                          size: 13,
+                          color: mac.tertiaryLabel,
+                        ),
+                        const SizedBox(width: 3),
+                      ],
                       Container(
                         width: 7,
                         height: 7,
@@ -388,6 +577,15 @@ class _SessionRow extends StatelessWidget {
                       model: session.modelLabel,
                     ),
                   ),
+                  if (session.childAttentionCount > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 14, top: 3),
+                      child: Text(
+                        '하위 작업 확인 필요 ${session.childAttentionCount}',
+                        key: ValueKey('session_attention_${session.sessionId}'),
+                        style: TextStyle(fontSize: 11, color: mac.orange),
+                      ),
+                    ),
                   if (isSelected || isBusy)
                     _SessionActions(
                       session: session,

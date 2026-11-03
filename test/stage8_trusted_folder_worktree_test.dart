@@ -178,6 +178,7 @@ void main() {
       final session = manager.createSession(
         backendOverride: backend,
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
 
       await manager.sendPrompt(session.sessionId, '기능 추가');
@@ -234,6 +235,7 @@ void main() {
       final session = manager.createSession(
         backendOverride: backend,
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
       await manager.sendPrompt(session.sessionId, '요청');
       session.status = SessionStatus.completed;
@@ -265,6 +267,7 @@ void main() {
       final session = manager.createSession(
         backendOverride: _FakeBackend(),
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
       await manager.sendPrompt(session.sessionId, '요청');
       session.status = SessionStatus.completed;
@@ -291,6 +294,7 @@ void main() {
       final session = manager.createSession(
         backendOverride: backend,
         workingDirectory: repo.path,
+        parentSessionId: 'root',
       );
       await manager.sendPrompt(session.sessionId, '요청');
       final link = session.activeWorktreeLink!;

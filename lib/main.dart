@@ -16,6 +16,7 @@ import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
 import 'services/session_manager.dart';
 import 'services/trusted_folder_store.dart';
+import 'services/workspace_group_store.dart';
 import 'ui/screens/inbox_screen.dart';
 import 'ui/screens/permission_center_screen.dart';
 import 'ui/screens/skills_screen.dart';
@@ -124,6 +125,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       _sessionManager = SessionManager(
         trustedFolders: guarded ? TrustedFolderStore.load() : null,
         effortPreferences: guarded ? EffortPreferenceStore.load() : null,
+        groups: guarded ? WorkspaceGroupStore.load() : null,
+        useAgentCompression: guarded,
         autoIsolateWithWorktree: guarded,
         onFolderTrustRequired: _confirmFolderTrust,
         onApprovalRequired: (session, req) {
@@ -143,7 +146,22 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
             if (mounted) _openQuestionDialog(session.sessionId, req);
           });
         },
+        onChildWorktreeFinished: (parent, child, message) {
+          _notificationService.notify(
+            kind: child.status == SessionStatus.failed
+                ? NotificationKind.taskFailed
+                : NotificationKind.taskCompleted,
+            title: '하위 작업: ${child.title}',
+            body: message,
+            sessionId: parent.sessionId,
+          );
+        },
         onSessionFinished: (session, success) {
+          // worktree 하위 세션은 상위 세션 알림으로 대신합니다.
+          if (session.parentSessionId != null &&
+              session.activeWorktreeLink != null) {
+            return;
+          }
           _notificationService.notify(
             kind: success
                 ? NotificationKind.taskCompleted
@@ -157,6 +175,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         },
       );
       _sessionManager.skillRegistry.discoverLocalSkills().ignore();
+      final home = Platform.environment['HOME'];
+      if (guarded && home != null) {
+        _sessionManager.skillRegistry
+            .installHandoffSkill(p.join(home, '.agent_control_center', 'skills'))
+            .ignore();
+      }
       _ownsSessionManager = true;
     }
 
@@ -266,32 +290,146 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       .firstOrNull;
 
   Future<void> _openNewSessionDialog(String? sourceSessionId) async {
-    final source =
-        _sessionById(sourceSessionId) ?? _sessionManager.activeSession;
-    final initialBackend = source?.backendType ?? BackendType.antigravity;
+    final source = _sessionById(sourceSessionId);
+    final fallback = source ?? _sessionManager.activeSession;
+    final initialBackend = fallback?.backendType ?? BackendType.antigravity;
     final efforts = _sessionManager.effortPreferences;
+    final groupId = source?.groupId;
     final request = await showDialog<NewSessionRequest>(
       context: context,
       builder: (ctx) => NewSessionDialog(
         initialBackend: initialBackend,
-        initialModel: source?.model,
+        initialModel: fallback?.model,
         initialEffort:
             efforts?.effortFor(initialBackend) ??
-            source?.effort ??
+            fallback?.effort ??
             ReasoningEffort.auto,
-        initialFolder: source?.workingDirectory ?? Directory.current.path,
+        initialFolder: fallback?.workingDirectory ?? Directory.current.path,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: efforts,
+        showInstructions: true,
+        previousSessions: groupId == null
+            ? const []
+            : _sessionManager.groups!.snapshotsFor(groupId),
       ),
     );
     if (request == null) return;
-    efforts?.remember(request.backend, request.effort);
-    _sessionManager.createSession(
+    _createSessionFrom(request, groupId: groupId);
+  }
+
+  Future<void> _openNewSessionInGroup(String groupId) async {
+    final store = _sessionManager.groups;
+    final group = store?.groupById(groupId);
+    if (store == null || group == null) return;
+    final request = await showDialog<NewSessionRequest>(
+      context: context,
+      builder: (ctx) => NewSessionDialog(
+        title: '새 세션 · ${group.name}',
+        initialBackend: group.backend,
+        initialModel: group.model,
+        initialEffort: group.effort,
+        initialFolder: group.folder,
+        trustedFolders: _sessionManager.trustedFolders,
+        effortPreferences: _sessionManager.effortPreferences,
+        showInstructions: true,
+        previousSessions: store.snapshotsFor(groupId),
+      ),
+    );
+    if (request == null) return;
+    _createSessionFrom(request, groupId: groupId);
+  }
+
+  void _createSessionFrom(NewSessionRequest request, {String? groupId}) {
+    _sessionManager.effortPreferences?.remember(request.backend, request.effort);
+    final session = _sessionManager.createSession(
       backendType: request.backend,
       model: request.model,
       effort: request.effort,
       workingDirectory: request.folder,
+      groupId: groupId,
+      instructions: request.instructions,
     );
+    final previous = request.continueFrom;
+    if (previous != null) {
+      _sessionManager.continueFromSnapshot(session.sessionId, previous);
+    }
+  }
+
+  Future<void> _openChildSessionDialog(String parentSessionId) async {
+    final parent = _sessionById(parentSessionId);
+    if (parent == null) return;
+    final request = await showDialog<NewSessionRequest>(
+      context: context,
+      builder: (ctx) => NewSessionDialog(
+        title: '하위 세션 · ${parent.title}',
+        initialBackend: parent.backendType,
+        initialModel: parent.model,
+        initialEffort: parent.effort,
+        initialFolder: parent.workingDirectory,
+        initialInstructions: parent.instructions,
+        trustedFolders: _sessionManager.trustedFolders,
+        effortPreferences: _sessionManager.effortPreferences,
+        showInstructions: true,
+        note: '상위 세션의 컨텍스트를 압축해 가져갑니다.',
+      ),
+    );
+    if (request == null || _sessionById(parentSessionId) == null) return;
+    _sessionManager.effortPreferences?.remember(request.backend, request.effort);
+    _sessionManager.createChildSession(
+      parentSessionId,
+      backendType: request.backend,
+      model: request.model,
+      effort: request.effort,
+      workingDirectory: request.folder,
+      instructions: request.instructions,
+    );
+  }
+
+  Future<void> _openGroupDialog({WorkspaceGroup? group}) async {
+    final store = _sessionManager.groups;
+    if (store == null) return;
+    final result = await showDialog<WorkspaceGroupResult>(
+      context: context,
+      builder: (ctx) => WorkspaceGroupDialog(
+        group: group,
+        defaultInstructions: store.defaultInstructions,
+        initialFolder:
+            _sessionManager.activeSession?.workingDirectory ??
+            Directory.current.path,
+        trustedFolders: _sessionManager.trustedFolders,
+        effortPreferences: _sessionManager.effortPreferences,
+      ),
+    );
+    if (result == null) return;
+    _sessionManager.saveGroup(
+      result.group,
+      defaultInstructions: result.defaultInstructions,
+    );
+  }
+
+  Future<void> _confirmDeleteGroup(String groupId) async {
+    final group = _sessionManager.groups?.groupById(groupId);
+    if (group == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        key: const ValueKey('delete_group_dialog'),
+        title: const Text('작업 그룹을 삭제할까요?'),
+        content: Text('"${group.name}"의 지침과 이전 세션 기록이 사라집니다. 열린 세션은 그룹 밖으로 옮겨집니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            key: const ValueKey('confirm_delete_group_button'),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) _sessionManager.deleteGroup(groupId);
   }
 
   Future<void> _openSessionSettings(String sessionId) async {
@@ -328,6 +466,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     if (result.folder != session.workingDirectory) {
       _sessionManager.updateSessionWorkingDirectory(sessionId, result.folder);
     }
+    _sessionManager.updateSessionInstructions(sessionId, result.instructions);
     if (mounted) setState(() {});
   }
 
@@ -465,6 +604,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
             usageByBackend: _sessionManager.usageByBackend,
             onSelectSession: _sessionManager.selectSession,
             onNewSession: _openNewSessionDialog,
+            groups: _sessionManager.groups?.groups,
+            onNewGroup: () => _openGroupDialog(),
+            onNewSessionInGroup: _openNewSessionInGroup,
+            onEditGroup: (id) =>
+                _openGroupDialog(group: _sessionManager.groups?.groupById(id)),
+            onDeleteGroup: _confirmDeleteGroup,
+            onNewChildSession: _openChildSessionDialog,
             onSessionSettings: _openSessionSettings,
             onDeleteSession: _confirmDeleteSession,
             onStopSession: _sessionManager.stopSession,
@@ -841,7 +987,11 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      isUser ? '사용자 (주영님)' : '에이전트 응답',
+                      isUser
+                          ? '사용자 (주영님)'
+                          : event.role == 'system'
+                          ? '시스템'
+                          : '에이전트 응답',
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 12,
@@ -876,6 +1026,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         return FileDiffViewerCard(event: event);
       case SkillInvokedEvent():
         return SkillInvokedBanner(event: event);
+      case ChildWorktreeEvent():
+        return ChildWorktreeNotice(
+          event: event,
+          onOpen: () => _sessionManager.selectSession(event.childSessionId),
+          onMerge: () => _mergeWorktree(event.childSessionId),
+        );
       case ErrorEvent():
         return Card(
           color: context.mac.red.withValues(alpha: 0.15),
