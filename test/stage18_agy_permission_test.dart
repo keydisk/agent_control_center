@@ -8,6 +8,8 @@ import 'package:agent_control_center/core/backend/agent_backend.dart';
 import 'package:agent_control_center/core/backend/local_hook_bridge.dart';
 import 'package:agent_control_center/core/models/agent_models.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/material.dart';
+import 'package:agent_control_center/ui/widgets/approval_and_question_dialogs.dart';
 
 const _conversation = '3b3c0582';
 
@@ -33,16 +35,39 @@ String _deniedStep(int index, String command) => jsonEncode({
   },
 });
 
-String _result({List<Object> denied = const [], int tokens = 10}) => jsonEncode({
-  'event': 'result',
-  'result': {
+// 도구 확인 단계의 soft-denial은 오류 설명 없이 취소될 수 있습니다.
+String _commandStep(
+  int index,
+  String state, {
+  String? command,
+  String? error,
+}) => jsonEncode({
+  'event': 'step_update',
+  'step_update': {
     'conversation_id': _conversation,
-    'status': 'SUCCESS',
-    'response': '',
-    'usage': {'input_tokens': tokens, 'total_tokens': tokens},
-    'denied_actions': denied,
+    'step_index': index,
+    'state': state,
+    'step_type': 'tool',
+    'tool_name': 'run_command',
+    'tool_info': {
+      'name': 'run_command',
+      if (command != null) 'parameters': {'CommandLine': command},
+      'error': ?error,
+    },
   },
 });
+
+String _result({List<Object> denied = const [], int tokens = 10}) =>
+    jsonEncode({
+      'event': 'result',
+      'result': {
+        'conversation_id': _conversation,
+        'status': 'SUCCESS',
+        'response': '',
+        'usage': {'input_tokens': tokens, 'total_tokens': tokens},
+        'denied_actions': denied,
+      },
+    });
 
 const _deniedAction = {'action': 'command', 'display_name': 'RunCommand'};
 
@@ -156,6 +181,79 @@ void main() {
       );
     });
 
+    test('오류 없이 취소된 명령도 최종 거부 결과에서 정확한 승인을 요청한다', () {
+      parser.parseLine(_commandStep(12, 'ACTIVE', command: 'find lib'));
+      parser.parseLine(_commandStep(12, 'CANCELLED'));
+      final events = parser.parseLine(_result(denied: [_deniedAction]));
+      final request = events.whereType<ApprovalRequestEvent>().single.request;
+      expect(request.id, 'agy_denied_12');
+      expect(request.targetResource, 'find lib');
+      expect(parser.deniedRules[request.id], 'command(find lib)');
+      expect(events.whereType<MessageEvent>(), isEmpty);
+      expect(
+        parser
+            .parseLine(_result(denied: [_deniedAction]))
+            .whereType<ApprovalRequestEvent>(),
+        isEmpty,
+        reason: '이전 턴의 명령을 다시 승인하지 않는다',
+      );
+    });
+
+    test('완료된 명령과 일반 실행 오류는 재실행 승인 대상에서 제외한다', () {
+      parser.parseLine(_commandStep(2, 'ACTIVE', command: 'mkdir example'));
+      parser.parseLine(_commandStep(2, 'DONE'));
+      parser.parseLine(_commandStep(3, 'ACTIVE', command: 'false'));
+      parser.parseLine(_commandStep(3, 'ERROR', error: 'exit status 1'));
+      parser.parseLine(_commandStep(4, 'ACTIVE', command: 'find lib'));
+      final events = parser.parseLine(_result(denied: [_deniedAction]));
+      expect(
+        events.whereType<ApprovalRequestEvent>().single.request.id,
+        'agy_denied_4',
+      );
+    });
+
+    test('취소만 되었거나 다른 권한이 거부된 경우 명령 승인을 요청하지 않는다', () {
+      for (final denied in <List<Object>>[
+        [],
+        [
+          {'action': 'file_write', 'display_name': 'EditFile'},
+        ],
+      ]) {
+        parser.parseLine(_commandStep(2, 'ACTIVE', command: 'find lib'));
+        expect(
+          parser
+              .parseLine(_result(denied: denied))
+              .whereType<ApprovalRequestEvent>(),
+          isEmpty,
+        );
+      }
+    });
+
+    testWidgets('복원한 권한 요청을 승인창에 표시하고 사용자 결정을 반환한다', (tester) async {
+      parser.parseLine(_commandStep(12, 'ACTIVE', command: 'find lib'));
+      final request = parser
+          .parseLine(_result(denied: [_deniedAction]))
+          .whereType<ApprovalRequestEvent>()
+          .single
+          .request;
+      ApprovalDecision? decision;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: UnifiedApprovalDialog(
+              request: request,
+              onDecision: (value) => decision = value,
+            ),
+          ),
+        ),
+      );
+      expect(find.text('에이전트 권한 승인 요청'), findsOneWidget);
+      expect(find.text('find lib'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('approval_btn_once')));
+      expect(decision?.requestId, 'agy_denied_12');
+      expect(decision?.approved, isTrue);
+    });
+
     test('거부가 없으면 메시지를 더하지 않는다', () {
       expect(parser.parseLine(_result()).whereType<MessageEvent>(), isEmpty);
     });
@@ -199,24 +297,27 @@ void main() {
       emit(_deniedStep(2, 'find lib'));
       emit(_result(denied: [_deniedAction], tokens: 10));
       await _settle();
-      expect(events.whereType<DoneEvent>(), isEmpty, reason: '답을 기다리는 동안 턴을 끝내지 않는다');
+      expect(
+        events.whereType<DoneEvent>(),
+        isEmpty,
+        reason: '답을 기다리는 동안 턴을 끝내지 않는다',
+      );
       expect(spawner.processes, hasLength(1));
 
-      await adapter.respondToApproval(_decision('agy_denied_2', approved: true));
+      await adapter.respondToApproval(
+        _decision('agy_denied_2', approved: true),
+      );
       await _settle();
 
       expect(spawner.processes, hasLength(2));
       expect(spawner.processes.first.killed, isTrue);
       final args = spawner.arguments.last;
       expect(args[args.indexOf('--conversation') + 1], _conversation);
-      expect(
-        jsonDecode(args[args.indexOf('--settings') + 1]),
-        {
-          'permissions': {
-            'allow': ['command(find lib)'],
-          },
+      expect(jsonDecode(args[args.indexOf('--settings') + 1]), {
+        'permissions': {
+          'allow': ['command(find lib)'],
         },
-      );
+      });
       expect(
         args[args.indexOf('--model') + 1],
         BackendType.antigravity.cliModel(
@@ -234,10 +335,50 @@ void main() {
       expect(done.usage.inputTokens, 15);
     });
 
+    test('오류 없이 취소된 명령도 사용자 승인 후 같은 대화에서 재개한다', () async {
+      emit(_commandStep(12, 'ACTIVE', command: 'find lib'));
+      emit(_commandStep(12, 'CANCELLED'));
+      emit(_result(denied: [_deniedAction]));
+      await _settle();
+      expect(events.whereType<ApprovalRequestEvent>(), hasLength(1));
+      expect(events.whereType<DoneEvent>(), isEmpty);
+      await adapter.respondToApproval(
+        _decision('agy_denied_12', approved: true),
+      );
+      await _settle();
+      expect(spawner.processes, hasLength(2));
+      final args = spawner.arguments.last;
+      expect(args[args.indexOf('--conversation') + 1], _conversation);
+      expect(
+        args[args.indexOf('--settings') + 1],
+        contains('command(find lib)'),
+      );
+      expect(spawner.processes.last.written.single, contains('find lib'));
+      expect(args, isNot(contains('--dangerously-skip-permissions')));
+    });
+
+    test('복원한 요청을 거부하면 허용 규칙과 재시작을 만들지 않는다', () async {
+      emit(_commandStep(12, 'ACTIVE', command: 'rm -rf build'));
+      emit(_result(denied: [_deniedAction]));
+      await _settle();
+      expect(
+        events.whereType<ApprovalRequestEvent>().single.request.isDestructive,
+        isTrue,
+      );
+      await adapter.respondToApproval(
+        _decision('agy_denied_12', approved: false),
+      );
+      await _settle();
+      expect(spawner.processes, hasLength(1));
+      expect(events.whereType<DoneEvent>(), hasLength(1));
+    });
+
     test('거부하면 재시작하지 않고 턴을 끝낸다', () async {
       emit(_deniedStep(2, 'rm x'));
       emit(_result(denied: [_deniedAction]));
-      await adapter.respondToApproval(_decision('agy_denied_2', approved: false));
+      await adapter.respondToApproval(
+        _decision('agy_denied_2', approved: false),
+      );
       await _settle();
       expect(spawner.processes, hasLength(1));
       expect(events.whereType<DoneEvent>(), hasLength(1));
@@ -245,7 +386,9 @@ void main() {
 
     test('결과가 오기 전에 답해도 결과를 기다렸다가 잇는다', () async {
       emit(_deniedStep(2, 'find lib'));
-      await adapter.respondToApproval(_decision('agy_denied_2', approved: true));
+      await adapter.respondToApproval(
+        _decision('agy_denied_2', approved: true),
+      );
       await _settle();
       expect(spawner.processes, hasLength(1));
 
@@ -259,11 +402,15 @@ void main() {
       emit(_deniedStep(2, 'find lib'));
       emit(_deniedStep(3, 'rm x'));
       emit(_result(denied: [_deniedAction]));
-      await adapter.respondToApproval(_decision('agy_denied_2', approved: true));
+      await adapter.respondToApproval(
+        _decision('agy_denied_2', approved: true),
+      );
       await _settle();
       expect(spawner.processes, hasLength(1));
 
-      await adapter.respondToApproval(_decision('agy_denied_3', approved: false));
+      await adapter.respondToApproval(
+        _decision('agy_denied_3', approved: false),
+      );
       await _settle();
       expect(spawner.processes, hasLength(2));
       final args = spawner.arguments.last;
@@ -276,7 +423,9 @@ void main() {
       emit(_deniedStep(2, 'find lib'));
       emit(_result(denied: [_deniedAction]));
       await adapter.interrupt();
-      await adapter.respondToApproval(_decision('agy_denied_2', approved: true));
+      await adapter.respondToApproval(
+        _decision('agy_denied_2', approved: true),
+      );
       await _settle();
       expect(spawner.processes, hasLength(1));
       expect(events.whereType<DoneEvent>(), isEmpty);

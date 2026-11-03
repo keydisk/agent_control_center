@@ -4,10 +4,7 @@ import '../../core/models/agent_models.dart';
 
 /// Google Antigravity CLI (`agy --output-format stream-json`) NDJSON 이벤트 파서
 class AntigravityEventParser {
-  AntigravityEventParser({
-    required this.sessionId,
-    this.model = '',
-  });
+  AntigravityEventParser({required this.sessionId, this.model = ''});
 
   /// 헤드리스 모드가 자동 거부한 명령의 승인 요청 ID 접두어
   static const deniedRequestPrefix = 'agy_denied_';
@@ -17,6 +14,7 @@ class AntigravityEventParser {
   String? conversationId;
   int _counter = 0;
   bool _askedApprovalForDenial = false;
+  final Map<String, Map<String, dynamic>> _unfinishedCommands = {};
 
   /// 자동 거부된 승인 요청별로 `permissions.allow`에 넣을 규칙
   final Map<String, String> deniedRules = {};
@@ -63,8 +61,7 @@ class AntigravityEventParser {
 
     if (eventType == 'step_update' && json['step_update'] is Map) {
       final step = Map<String, dynamic>.from(json['step_update'] as Map);
-      conversationId =
-          (step['conversation_id'] ?? conversationId)?.toString();
+      conversationId = (step['conversation_id'] ?? conversationId)?.toString();
       final stepIdx = step['step_index'] ?? _counter;
       final state = (step['state'] ?? '').toString(); // ACTIVE | DONE | WAITING
       final stepType = (step['step_type'] ?? '').toString();
@@ -142,6 +139,20 @@ class AntigravityEventParser {
         }
       } else if (step['args'] is Map) {
         toolArgs = Map<String, dynamic>.from(step['args'] as Map);
+      }
+
+      final commandId = '$deniedRequestPrefix$stepIdx';
+      if (toolName == 'run_command') {
+        // 승인 단계에서 취소되면 오류/인자가 생략될 수 있어 ACTIVE의 명령을 보관합니다.
+        if (toolArgs['CommandLine'] is! String &&
+            _unfinishedCommands.containsKey(commandId)) {
+          toolArgs = _unfinishedCommands[commandId]!;
+        }
+        if (state == 'DONE' || (state == 'ERROR' && toolError.isNotEmpty)) {
+          _unfinishedCommands.remove(commandId);
+        } else if (toolArgs['CommandLine'] is String) {
+          _unfinishedCommands[commandId] = Map.of(toolArgs);
+        }
       }
 
       // 스킬 파일 읽기 또는 ego-browser / cli-hub 실행 시 SkillInvokedEvent 추가 발행
@@ -263,30 +274,14 @@ class AntigravityEventParser {
       // 헤드리스 모드는 권한을 묻지 못하고 거부하므로 앱에서 대신 묻습니다.
       final deniedRule = _ruleForDenial(toolName, toolArgs, toolError);
       if (deniedRule != null) {
-        _askedApprovalForDenial = true;
-        deniedRules['$deniedRequestPrefix$stepIdx'] = deniedRule;
+        _unfinishedCommands.remove(commandId);
         events.add(
-          ApprovalRequestEvent(
-            request: ApprovalRequestData(
-              id: '$deniedRequestPrefix$stepIdx',
-              sessionId: sessionId,
-              backend: BackendType.antigravity,
-              toolName: toolName,
-              arguments: toolArgs,
-              category: ApprovalRequestData.classifyTool(toolName, toolArgs),
-              reason: 'Antigravity가 $deniedRule 권한을 요청했습니다. 승인하면 작업을 이어갑니다.',
-              isDestructive: ApprovalRequestData.detectDestructive(
-                toolName,
-                toolArgs,
-              ),
-              createdAt: now,
-              targetResource: ApprovalRequestData.extractTargetResource(
-                toolName,
-                toolArgs,
-              ),
-            ),
-            model: model,
-            rawLog: trimmed,
+          _approvalForDenial(
+            commandId,
+            toolName,
+            toolArgs,
+            deniedRule,
+            trimmed,
           ),
         );
       }
@@ -352,8 +347,7 @@ class AntigravityEventParser {
 
     if (eventType == 'result' && json['result'] is Map) {
       final res = Map<String, dynamic>.from(json['result'] as Map);
-      conversationId =
-          (res['conversation_id'] ?? conversationId)?.toString();
+      conversationId = (res['conversation_id'] ?? conversationId)?.toString();
       final status = (res['status'] ?? 'SUCCESS').toString();
       final errorMsg = (res['error'] ?? '').toString();
       final durationSec = (res['duration_seconds'] as num?)?.toDouble() ?? 0.0;
@@ -376,8 +370,25 @@ class AntigravityEventParser {
       }
 
       final events = <AgentEvent>[];
-      // 승인으로 풀 수 없는 거부는 빈 응답으로 끝나므로 이유를 직접 알립니다.
       final denied = res['denied_actions'];
+      if (denied is List &&
+          denied.any(
+            (action) => action is Map && action['action'] == 'command',
+          )) {
+        for (final entry in _unfinishedCommands.entries) {
+          events.add(
+            _approvalForDenial(
+              entry.key,
+              'run_command',
+              entry.value,
+              'command(${entry.value['CommandLine']})',
+              trimmed,
+            ),
+          );
+        }
+      }
+      _unfinishedCommands.clear();
+      // 구체적인 명령을 복원할 수 없는 거부는 이유를 직접 알립니다.
       if (denied is List && denied.isNotEmpty && !_askedApprovalForDenial) {
         final names = denied
             .map((d) => d is Map ? d['display_name'] ?? d['action'] : d)
@@ -429,6 +440,39 @@ class AntigravityEventParser {
     }
 
     return const [];
+  }
+
+  ApprovalRequestEvent _approvalForDenial(
+    String id,
+    String toolName,
+    Map<String, dynamic> toolArgs,
+    String deniedRule,
+    String rawLog,
+  ) {
+    _askedApprovalForDenial = true;
+    deniedRules[id] = deniedRule;
+    return ApprovalRequestEvent(
+      request: ApprovalRequestData(
+        id: id,
+        sessionId: sessionId,
+        backend: BackendType.antigravity,
+        toolName: toolName,
+        arguments: toolArgs,
+        category: ApprovalRequestData.classifyTool(toolName, toolArgs),
+        reason: 'Antigravity가 $deniedRule 권한을 요청했습니다. 승인하면 작업을 이어갑니다.',
+        isDestructive: ApprovalRequestData.detectDestructive(
+          toolName,
+          toolArgs,
+        ),
+        createdAt: DateTime.now(),
+        targetResource: ApprovalRequestData.extractTargetResource(
+          toolName,
+          toolArgs,
+        ),
+      ),
+      model: model,
+      rawLog: rawLog,
+    );
   }
 
   (String, String)? _detectSkillFromTool(
