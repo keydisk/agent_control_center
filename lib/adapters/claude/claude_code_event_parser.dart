@@ -366,6 +366,7 @@ class ClaudeCodeEventParser {
           inputTokens: inTok + cacheCreate,
           outputTokens: outTok,
           cachedTokens: cacheRead,
+          promptTokens: inTok + cacheCreate + cacheRead,
           totalTokens: inTok + outTok + cacheRead + cacheCreate,
           costUsd: costUsd,
         );

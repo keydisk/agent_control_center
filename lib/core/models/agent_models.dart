@@ -424,6 +424,7 @@ class TokenUsage {
     this.outputTokens = 0,
     this.thinkingTokens = 0,
     this.cachedTokens = 0,
+    this.promptTokens = 0,
     this.totalTokens = 0,
     this.costUsd = 0.0,
   });
@@ -432,8 +433,13 @@ class TokenUsage {
   final int outputTokens;
   final int thinkingTokens;
   final int cachedTokens;
+
+  /// 캐시 적중분을 포함한 전체 입력. 백엔드마다 inputTokens에 캐시를 넣는 방식이 달라 따로 둡니다.
+  final int promptTokens;
   final int totalTokens;
   final double costUsd;
+
+  double get cacheHitRate => promptTokens == 0 ? 0 : cachedTokens / promptTokens;
 
   TokenUsage operator +(TokenUsage other) {
     return TokenUsage(
@@ -441,6 +447,7 @@ class TokenUsage {
       outputTokens: outputTokens + other.outputTokens,
       thinkingTokens: thinkingTokens + other.thinkingTokens,
       cachedTokens: cachedTokens + other.cachedTokens,
+      promptTokens: promptTokens + other.promptTokens,
       totalTokens: totalTokens + other.totalTokens,
       costUsd: costUsd + other.costUsd,
     );
