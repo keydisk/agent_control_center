@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import '../theme/mac_theme.dart';
 import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
@@ -32,23 +33,26 @@ class BackendModelBadge extends StatelessWidget {
     final label = model.isNotEmpty
         ? '${backend.displayName} · $model'
         : backend.displayName;
-    return Container(
-      constraints: const BoxConstraints(maxWidth: 140),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.45)),
-      ),
-      child: Text(
-        label,
-        overflow: TextOverflow.ellipsis,
-        maxLines: 1,
-        style: TextStyle(
-          fontSize: 11,
-          fontWeight: FontWeight.w600,
-          color: color,
-        ),
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 220),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 5),
+          Flexible(
+            child: Text(
+              label,
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+              style: TextStyle(fontSize: 11, color: context.mac.secondaryLabel),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -193,7 +197,7 @@ class _MarkdownParagraphBlock extends StatelessWidget {
           TextSpan(
             text: token.substring(1, token.length - 1),
             style: const TextStyle(
-              fontFamily: 'monospace',
+              fontFamily: kMonoFont,
               backgroundColor: Color(0x26888888),
               fontWeight: FontWeight.w500,
             ),
@@ -230,17 +234,17 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: const Color(0xFF1E1E2E),
+        color: context.mac.codeBackground,
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white12),
+        border: Border.all(color: context.mac.separator),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: const BoxDecoration(
-              color: Color(0xFF181825),
+            decoration: BoxDecoration(
+              color: context.mac.codeHeader,
               borderRadius: BorderRadius.vertical(top: Radius.circular(8)),
             ),
             child: Row(
@@ -248,24 +252,24 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
               children: [
                 Text(
                   language.isEmpty ? 'code' : language,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 11,
-                    color: Colors.white70,
-                    fontFamily: 'monospace',
+                    color: context.mac.secondaryLabel,
+                    fontFamily: kMonoFont,
                   ),
                 ),
                 InkWell(
                   onTap: () {
                     Clipboard.setData(ClipboardData(text: code));
                   },
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.copy, size: 13, color: Colors.white70),
+                      Icon(Icons.copy, size: 13, color: context.mac.secondaryLabel),
                       SizedBox(width: 4),
                       Text(
                         '복사',
-                        style: TextStyle(fontSize: 11, color: Colors.white70),
+                        style: TextStyle(fontSize: 11, color: context.mac.secondaryLabel),
                       ),
                     ],
                   ),
@@ -276,12 +280,12 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.all(12),
             child: SelectableText.rich(
-              _highlightSyntax(code),
-              style: const TextStyle(
-                fontFamily: 'monospace',
+              _highlightSyntax(code, context.mac.purple),
+              style: TextStyle(
+                fontFamily: kMonoFont,
                 fontSize: 12.5,
                 height: 1.4,
-                color: Color(0xFFCDD6F4),
+                color: context.mac.codeText,
               ),
             ),
           ),
@@ -290,7 +294,7 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
     );
   }
 
-  TextSpan _highlightSyntax(String source) {
+  TextSpan _highlightSyntax(String source, Color keywordColor) {
     final keywordRegex = RegExp(
       r'\b(import|class|final|const|void|return|async|await|if|else|for|while|switch|case|def|from|function|var|let|true|false|null)\b',
     );
@@ -303,8 +307,8 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
       spans.add(
         TextSpan(
           text: m.group(0),
-          style: const TextStyle(
-            color: Color(0xFFCBA6F7),
+          style: TextStyle(
+            color: keywordColor,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -333,8 +337,8 @@ class ToolCallCard extends StatelessWidget {
         ? '{}'
         : const JsonEncoder.withIndent('  ').convert(event.arguments);
     final statusColor = event.isError
-        ? Colors.redAccent
-        : (event.isRunning ? Colors.amber : Colors.teal);
+        ? context.mac.red
+        : (event.isRunning ? context.mac.orange : context.mac.green);
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -390,12 +394,12 @@ class ToolCallCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: Colors.black12,
+              color: context.mac.fill,
               borderRadius: BorderRadius.circular(6),
             ),
             child: SelectableText(
               argsJson,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5),
+              style: const TextStyle(fontFamily: kMonoFont, fontSize: 11.5),
             ),
           ),
           if (event.result.isNotEmpty) ...[
@@ -408,12 +412,12 @@ class ToolCallCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: Colors.black12,
+                color: context.mac.fill,
                 borderRadius: BorderRadius.circular(6),
               ),
               child: SelectableText(
                 event.result,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 11.5),
+                style: const TextStyle(fontFamily: kMonoFont, fontSize: 11.5),
               ),
             ),
           ],
@@ -439,7 +443,7 @@ class FileDiffViewerCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: Colors.blueGrey.withValues(alpha: 0.4)),
+        side: BorderSide(color: context.mac.tertiaryLabel.withValues(alpha: 0.4)),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -457,7 +461,7 @@ class FileDiffViewerCard extends StatelessWidget {
                     style: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.bold,
-                      fontFamily: 'monospace',
+                      fontFamily: kMonoFont,
                     ),
                   ),
                 ),
@@ -474,7 +478,7 @@ class FileDiffViewerCard extends StatelessWidget {
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: const Color(0xFF14161F),
+                color: context.mac.codeBackground,
                 borderRadius: BorderRadius.circular(6),
               ),
               child: Column(
@@ -483,9 +487,9 @@ class FileDiffViewerCard extends StatelessWidget {
                   for (final line in diffLines)
                     Container(
                       color: line.startsWith('+') && !line.startsWith('+++')
-                          ? Colors.green.withValues(alpha: 0.18)
+                          ? context.mac.green.withValues(alpha: 0.18)
                           : (line.startsWith('-') && !line.startsWith('---')
-                                ? Colors.red.withValues(alpha: 0.18)
+                                ? context.mac.red.withValues(alpha: 0.18)
                                 : Colors.transparent),
                       padding: const EdgeInsets.symmetric(
                         horizontal: 4,
@@ -494,13 +498,13 @@ class FileDiffViewerCard extends StatelessWidget {
                       child: SelectableText(
                         line,
                         style: TextStyle(
-                          fontFamily: 'monospace',
+                          fontFamily: kMonoFont,
                           fontSize: 11.5,
                           color: line.startsWith('+') && !line.startsWith('+++')
-                              ? Colors.greenAccent
+                              ? context.mac.green
                               : (line.startsWith('-') && !line.startsWith('---')
-                                    ? Colors.redAccent
-                                    : Colors.white70),
+                                    ? context.mac.red
+                                    : context.mac.secondaryLabel),
                         ),
                       ),
                     ),
@@ -529,16 +533,16 @@ class SkillInvokedBanner extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: Colors.deepPurple.withValues(alpha: 0.12),
+        color: context.mac.purple.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.deepPurple.withValues(alpha: 0.4)),
+        border: Border.all(color: context.mac.purple.withValues(alpha: 0.4)),
       ),
       child: Row(
         children: [
-          const Icon(
+          Icon(
             Icons.auto_awesome,
             size: 16,
-            color: Colors.deepPurpleAccent,
+            color: context.mac.purple,
           ),
           const SizedBox(width: 8),
           Expanded(

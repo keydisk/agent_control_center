@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/mac_theme.dart';
 
 import '../../services/inbox_service.dart';
 import '../../services/notification_service.dart';
@@ -53,13 +54,13 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
   Color _urgencyColor(UrgencyLevel urgency) {
     switch (urgency) {
       case UrgencyLevel.low:
-        return Colors.blueGrey;
+        return context.mac.tertiaryLabel;
       case UrgencyLevel.medium:
-        return Colors.lightBlueAccent;
+        return context.mac.blue;
       case UrgencyLevel.high:
-        return Colors.orangeAccent;
+        return context.mac.orange;
       case UrgencyLevel.critical:
-        return Colors.redAccent;
+        return context.mac.red;
     }
   }
 
@@ -92,7 +93,7 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.mark_email_unread_outlined, color: Colors.tealAccent),
+          Icon(Icons.mark_email_unread_outlined, color: context.mac.green),
           const SizedBox(width: 8),
           const Expanded(
             child: Text('Inbox 요약 센터 & 알림 (Gmail / Slack / Telegram / Mail / iMessage)'),
@@ -245,10 +246,10 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                       ),
                       Chip(
                         key: const ValueKey('kakaotalk_unsupported_chip'),
-                        avatar: const Icon(
+                        avatar: Icon(
                           Icons.block,
                           size: 15,
-                          color: Colors.redAccent,
+                          color: context.mac.red,
                         ),
                         label: Text(
                           InboxSourceType.kakaoTalk.supportNote,
@@ -266,10 +267,10 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                         Expanded(
                           flex: 2,
                           child: summaries.isEmpty
-                              ? const Center(
+                              ? Center(
                                   child: Text(
                                     '수신된 요약 항목이 없습니다.',
-                                    style: TextStyle(color: Colors.white60),
+                                    style: TextStyle(color: context.mac.secondaryLabel),
                                   ),
                                 )
                               : ListView.builder(
@@ -334,10 +335,10 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                         Expanded(
                           flex: 3,
                           child: selected == null
-                              ? const Center(
+                              ? Center(
                                   child: Text(
                                     '좌측에서 메일·메시지 요약을 선택하세요.',
-                                    style: TextStyle(color: Colors.white60),
+                                    style: TextStyle(color: context.mac.secondaryLabel),
                                   ),
                                 )
                               : Container(
@@ -377,9 +378,9 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                         const SizedBox(height: 6),
                                         Text(
                                           '발신자: ${selected.sender} (${selected.source.label}) · 긴급도: ${selected.urgency.label}',
-                                          style: const TextStyle(
+                                          style: TextStyle(
                                             fontSize: 12,
-                                            color: Colors.white70,
+                                            color: context.mac.secondaryLabel,
                                           ),
                                         ),
                                         const Divider(height: 18),
@@ -408,7 +409,7 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                         Container(
                                           padding: const EdgeInsets.all(10),
                                           decoration: BoxDecoration(
-                                            color: Colors.amber.withValues(
+                                            color: context.mac.orange.withValues(
                                               alpha: 0.14,
                                             ),
                                             borderRadius: BorderRadius.circular(
@@ -417,10 +418,10 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                           ),
                                           child: Row(
                                             children: [
-                                              const Icon(
+                                              Icon(
                                                 Icons.task_alt,
                                                 size: 16,
-                                                color: Colors.amberAccent,
+                                                color: context.mac.orange,
                                               ),
                                               const SizedBox(width: 8),
                                               Expanded(
@@ -436,12 +437,12 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                           ),
                                         ),
                                         const SizedBox(height: 12),
-                                        const Text(
+                                        Text(
                                           '외부 요약 모델에 전달된 페이로드 (프라이버시 필터 적용됨):',
                                           style: TextStyle(
                                             fontSize: 11.5,
                                             fontWeight: FontWeight.bold,
-                                            color: Colors.white70,
+                                            color: context.mac.secondaryLabel,
                                           ),
                                         ),
                                         const SizedBox(height: 4),
@@ -449,7 +450,7 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                           width: double.infinity,
                                           padding: const EdgeInsets.all(8),
                                           decoration: BoxDecoration(
-                                            color: Colors.black26,
+                                            color: context.mac.fill,
                                             borderRadius: BorderRadius.circular(
                                               6,
                                             ),
@@ -457,7 +458,7 @@ class _InboxSummaryDialogState extends State<InboxSummaryDialog> {
                                           child: SelectableText(
                                             selected.forwardedSnippet,
                                             style: const TextStyle(
-                                              fontFamily: 'monospace',
+                                              fontFamily: kMonoFont,
                                               fontSize: 11,
                                             ),
                                           ),

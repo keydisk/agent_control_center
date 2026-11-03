@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/mac_theme.dart';
 
 import '../../services/skill_registry.dart';
 import '../widgets/timeline_widgets.dart';
@@ -90,7 +91,7 @@ class _SkillsManagementDialogState extends State<SkillsManagementDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.auto_awesome, color: Colors.deepPurpleAccent),
+          Icon(Icons.auto_awesome, color: context.mac.purple),
           const SizedBox(width: 8),
           const Expanded(
             child: Text('스킬 관리 센터 (전 백엔드 공통 SKILL.md)'),
@@ -112,10 +113,10 @@ class _SkillsManagementDialogState extends State<SkillsManagementDialog> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: Colors.deepPurple.withValues(alpha: 0.14),
+                color: context.mac.purple.withValues(alpha: 0.14),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Column(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
@@ -129,7 +130,7 @@ class _SkillsManagementDialogState extends State<SkillsManagementDialog> {
                   Text(
                     '• 웹 관련 작업(검색, 페이지 열기, 폼 입력, 스크래핑) → ego-browser 스킬\n'
                     '• 별도 소프트웨어/외부 CLI 실행이 필요한 작업 → cli-hub-meta-skill 스킬',
-                    style: TextStyle(fontSize: 11.5, color: Colors.white70),
+                    style: TextStyle(fontSize: 11.5, color: context.mac.secondaryLabel),
                   ),
                 ],
               ),
@@ -139,9 +140,9 @@ class _SkillsManagementDialogState extends State<SkillsManagementDialog> {
               Text(
                 _syncStatusMessage,
                 key: const ValueKey('sync_status_message'),
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
-                  color: Colors.greenAccent,
+                  color: context.mac.green,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -191,18 +192,18 @@ class _SkillsManagementDialogState extends State<SkillsManagementDialog> {
                           const SizedBox(height: 4),
                           Text(
                             skill.description,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 12,
-                              color: Colors.white70,
+                              color: context.mac.secondaryLabel,
                             ),
                           ),
                           if (skill.routingSummary.isNotEmpty) ...[
                             const SizedBox(height: 6),
                             Text(
                               '라우팅: ${skill.routingSummary}',
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 11.5,
-                                color: Colors.amberAccent,
+                                color: context.mac.orange,
                               ),
                             ),
                           ],
