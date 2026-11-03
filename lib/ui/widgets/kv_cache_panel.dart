@@ -1,9 +1,11 @@
+import 'dart:math' show max;
+
 import 'package:flutter/material.dart';
 
 import '../../core/models/agent_models.dart';
 import '../theme/mac_theme.dart';
 
-/// 오른쪽 사이드바. 현재 세션과 백엔드별 KV(프롬프트) 캐시 사용량을 표시합니다.
+/// 오른쪽 사이드바. 토큰 사용량 그래프와 KV(프롬프트) 캐시 적중률을 표시합니다.
 class KvCachePanel extends StatelessWidget {
   const KvCachePanel({
     super.key,
@@ -17,9 +19,17 @@ class KvCachePanel extends StatelessWidget {
   static String _percent(TokenUsage usage) =>
       '${(usage.cacheHitRate * 100).toStringAsFixed(1)}%';
 
+  static String _breakdown(TokenUsage usage) =>
+      '입력 ${usage.promptTokens} · 출력 ${usage.outputTokens}'
+      '${usage.costUsd > 0 ? ' · \$${usage.costUsd.toStringAsFixed(4)}' : ''}';
+
   @override
   Widget build(BuildContext context) {
     final mac = context.mac;
+    final maxTokens = usageByBackend.values.fold(
+      0,
+      (largest, usage) => max(largest, usage.totalTokens),
+    );
     final labelStyle = TextStyle(fontSize: 11, color: mac.secondaryLabel);
     final valueStyle = TextStyle(
       fontSize: 11,
@@ -52,6 +62,51 @@ class KvCachePanel extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.all(12),
         children: [
+          const Text(
+            '사용량',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 10),
+          row(
+            '현재 세션',
+            '${session.totalTokens} tok',
+            valueKey: const ValueKey('usage_session_tokens'),
+          ),
+          const SizedBox(height: 6),
+          for (final backend in BackendType.values)
+            Builder(
+              builder: (context) {
+                final usage = usageByBackend[backend] ?? const TokenUsage();
+                return Tooltip(
+                  message: _breakdown(usage),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        row(backend.displayName, '${usage.totalTokens} tok'),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            key: ValueKey('usage_bar_${backend.id}'),
+                            value: maxTokens == 0
+                                ? 0
+                                : usage.totalTokens / maxTokens,
+                            minHeight: 6,
+                            color: mac.blue,
+                            backgroundColor: mac.fill,
+                            semanticsLabel:
+                                '${backend.displayName} 토큰 사용량 '
+                                '${usage.totalTokens}',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          const SizedBox(height: 12),
           const Text(
             'KV 캐시',
             style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
