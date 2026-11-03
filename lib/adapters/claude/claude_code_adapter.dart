@@ -55,6 +55,9 @@ class ClaudeCodeAdapter implements AgentBackend {
       '--include-partial-messages',
       '--permission-prompts',
       'host',
+      // 이 옵션이 없으면 권한 요청이 앱으로 오지 않고 자동 거부됩니다.
+      '--permission-prompt-tool',
+      'stdio',
       if (config.model.isNotEmpty) ...['--model', config.model],
       if (config.effort != ReasoningEffort.auto) ...[
         '--effort',
@@ -204,11 +207,13 @@ class ClaudeCodeAdapter implements AgentBackend {
         backendType: config.backendType,
         workingDirectory: config.workingDirectory,
         model: config.model,
+        effort: config.effort,
         conversationId: conversationId,
         extraArgs: config.extraArgs,
         environment: config.environment,
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
+        trustedDirectories: config.trustedDirectories,
       ),
     );
   }

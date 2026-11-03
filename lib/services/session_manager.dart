@@ -639,6 +639,10 @@ class SessionManager extends ChangeNotifier {
 
     session.eventSub = session.backend.events.listen((event) {
       if (event is ApprovalRequestEvent) {
+        if (_isTrustedFileAccess(session, event.request)) {
+          _approveTrustedFileAccess(session, event.request);
+          return;
+        }
         final preApproved = _permissionCenter.checkPreApproved(event.request);
         if (preApproved != null) {
           session.resolvedRequestIds.add(event.request.id);
@@ -672,6 +676,66 @@ class SessionManager extends ChangeNotifier {
       session.rawLogs.add(line);
       notifyListeners();
     });
+  }
+
+  static const _fileReadTools = {'Read', 'view_file', 'read_file', 'list_dir'};
+
+  /// 신뢰 폴더 안의 파일 읽기·쓰기인지 판단합니다. 명령 실행과 파괴적 작업은 계속 묻습니다.
+  bool _isTrustedFileAccess(ManagedSession session, ApprovalRequestData req) {
+    final store = trustedFolders;
+    if (store == null ||
+        req.isDestructive ||
+        req.category == ApprovalCategory.destructive ||
+        (req.category != ApprovalCategory.fileWrite &&
+            !_fileReadTools.contains(req.toolName))) {
+      return false;
+    }
+    final path = [
+      req.arguments['file_path'],
+      req.arguments['notebook_path'],
+      req.arguments['Path'],
+      req.arguments['TargetFile'],
+      req.arguments['path'],
+    ].whereType<String>().firstOrNull;
+    if (path == null) return false;
+    final target = TrustedFolderStore.canonicalPath(
+      p.isAbsolute(path) ? path : p.join(session.effectiveDirectory, path),
+    );
+    if (store.isTrusted(target)) return true;
+    // worktree는 임시 폴더에 있어도 신뢰 폴더의 작업 사본입니다.
+    final root = TrustedFolderStore.canonicalPath(session.effectiveDirectory);
+    return store.isTrusted(session.workingDirectory) &&
+        (target == root || p.isWithin(root, target));
+  }
+
+  void _approveTrustedFileAccess(
+    ManagedSession session,
+    ApprovalRequestData request,
+  ) {
+    session.resolvedRequestIds.add(request.id);
+    session.backend.respondToApproval(
+      _permissionCenter.recordDecision(
+        request,
+        ApprovalDecision(
+          requestId: request.id,
+          approved: true,
+          scope: ApprovalScope.once,
+          reason: '신뢰 폴더 안의 파일 접근',
+        ),
+      ),
+    );
+  }
+
+  /// CLI가 처음부터 승인 없이 접근할 폴더. 세션 폴더를 신뢰할 때만 넘깁니다.
+  List<String> _trustedDirectories(ManagedSession session) {
+    final store = trustedFolders;
+    if (store == null || !store.isTrusted(session.workingDirectory)) {
+      return const [];
+    }
+    return {
+      TrustedFolderStore.canonicalPath(session.effectiveDirectory),
+      TrustedFolderStore.canonicalPath(session.workingDirectory),
+    }.toList();
   }
 
   void _mergeOrAppendEvent(ManagedSession session, AgentEvent incoming) {
@@ -990,6 +1054,7 @@ class SessionManager extends ChangeNotifier {
             model: session.model,
             effort: session.effort,
             conversationId: session.conversationIdToResume,
+            trustedDirectories: _trustedDirectories(session),
             // ponytail: Codex·Antigravity는 매 턴 앞에 붙으므로 긴 컨텍스트가 반복됩니다. 비용이 문제되면 첫 턴에만 붙입니다.
             systemPromptAppend: [
               _skillRegistry.buildRoutingInstructionForPrompt(prompt),

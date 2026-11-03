@@ -170,7 +170,11 @@ void main() {
     setUp(() async {
       spawner = _Spawner();
       bridge = LocalHookBridgeServer();
-      adapter = AntigravityAdapter(spawner: spawner, hookBridge: bridge);
+      adapter = AntigravityAdapter(
+        spawner: spawner,
+        hookBridge: bridge,
+        userSettingsFile: File('/nonexistent/settings.json'),
+      );
       events = [];
       adapter.events.listen(events.add);
       await adapter.start(

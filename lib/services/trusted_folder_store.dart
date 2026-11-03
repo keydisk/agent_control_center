@@ -36,6 +36,9 @@ class TrustedFolderStore {
 
   bool isTrusted(String path) => coveringFolders(path).isNotEmpty;
 
+  /// 심볼릭 링크를 푼 실제 경로. 아직 없는 파일은 있는 상위 폴더까지 풀어서 판정합니다.
+  static String canonicalPath(String path) => _canonical(path);
+
   /// 이 경로에 신뢰를 주는 등록 폴더들. 상위 폴더 등록도 포함합니다.
   List<String> coveringFolders(String path) {
     final target = _canonical(path);
@@ -69,10 +72,19 @@ class TrustedFolderStore {
   }
 
   static String _canonical(String path) {
-    try {
-      return Directory(path).resolveSymbolicLinksSync();
-    } on FileSystemException catch (_) {
-      return p.normalize(p.absolute(path));
+    final normalized = p.normalize(p.absolute(path));
+    var existing = normalized;
+    while (true) {
+      try {
+        final real = Directory(existing).resolveSymbolicLinksSync();
+        return existing == normalized
+            ? real
+            : p.join(real, p.relative(normalized, from: existing));
+      } on FileSystemException catch (_) {
+        final parent = p.dirname(existing);
+        if (parent == existing) return normalized;
+        existing = parent;
+      }
     }
   }
 }
