@@ -127,6 +127,7 @@ void main() {
     asked = [];
     manager = SessionManager(
       trustedFolders: store,
+      defaultPermissionMode: PermissionMode.auto,
       onApprovalRequired: (session, request) => asked.add(request),
     );
     backend = _FakeBackend();
@@ -142,14 +143,17 @@ void main() {
     temp.deleteSync(recursive: true);
   });
 
-  group('신뢰 폴더 자동 허용', () {
-    test('신뢰 폴더 안의 읽기·쓰기는 묻지 않고 허용하고 기록을 남긴다', () {
-      for (final (i, event) in [
+  group('파괴적 작업만 묻기', () {
+    test('파괴적이지 않은 요청은 폴더와 도구에 관계없이 묻지 않고 기록을 남긴다', () {
+      final requests = [
         _request('Write', {'file_path': '${trusted.path}/new/a.dart'}),
-        _request('Edit', {'file_path': 'relative.dart'}),
-        _request('Read', {'file_path': '${trusted.path}/a.dart'}),
-        _request('edit_file', {'Path': '${trusted.path}/a.dart'}),
-      ].indexed) {
+        _request('Write', {'file_path': '${other.path}/a.dart'}),
+        _request('Read', {'file_path': '/etc/hosts'}),
+        _request('Bash', {'command': 'flutter test'}),
+        _request('run_command', {'CommandLine': 'git commit -m x'}),
+        _request('WebFetch', {'url': 'https://example.com'}),
+      ];
+      for (final (i, event) in requests.indexed) {
         backend.eventCtrl.add(event);
         expect(backend.decisions, hasLength(i + 1));
         expect(backend.decisions.last.approved, isTrue);
@@ -158,47 +162,25 @@ void main() {
       final session = manager.sessions.single;
       expect(session.status, SessionStatus.idle);
       expect(session.events, isEmpty, reason: '승인 카드를 쌓지 않는다');
-      expect(manager.permissionCenter.auditLogs, hasLength(4));
+      expect(manager.permissionCenter.auditLogs, hasLength(requests.length));
     });
 
-    test('폴더 밖 파일, 명령 실행, 파괴적 작업은 계속 묻는다', () {
-      for (final event in [
-        _request('Write', {'file_path': '${other.path}/a.dart'}),
-        _request('Write', {'file_path': '${trusted.path}/../other/a.dart'}),
-        _request('Bash', {'command': 'ls'}),
-        _request('Write', {'file_path': '${trusted.path}/a'}, destructive: true),
-        _request('Write', {}),
-      ]) {
-        backend.eventCtrl.add(event);
-      }
-      expect(asked, hasLength(5));
+    test('파괴적 작업은 묻고 답할 때까지 승인하지 않는다', () {
+      backend.eventCtrl.add(_request('Bash', {'command': 'rm -rf build'}));
       expect(backend.decisions, isEmpty);
+      expect(asked, hasLength(1));
       expect(manager.sessions.single.status, SessionStatus.awaitingApproval);
     });
 
-    test('심볼릭 링크로 폴더 밖을 가리키는 경로는 묻는다', () {
-      Link('${trusted.path}/escape').createSync(other.path);
-      backend.eventCtrl.add(
-        _request('Write', {'file_path': '${trusted.path}/escape/new.dart'}),
+    test('수동 모드는 파괴적이지 않아도 묻는다', () {
+      final plain = SessionManager(
+        onApprovalRequired: (session, request) => asked.add(request),
       );
-      expect(asked, hasLength(1));
-    });
-
-    test('worktree 안의 파일도 허용하고, 폴더 신뢰를 해제하면 묻는다', () {
-      final session = manager.sessions.single;
-      final worktree = Directory('${temp.path}/wt/checkout')
-        ..createSync(recursive: true);
-      session.isolatedWorktreePath = worktree.path;
-      backend.eventCtrl.add(
-        _request('Write', {'file_path': '${worktree.path}/a.dart'}),
-      );
-      expect(backend.decisions, hasLength(1));
-
-      store.coveringFolders(trusted.path).forEach(store.remove);
-      backend.eventCtrl.add(
-        _request('Write', {'file_path': '${worktree.path}/b.dart'}),
-      );
-      expect(backend.decisions, hasLength(1));
+      addTearDown(plain.dispose);
+      final own = _FakeBackend();
+      plain.createSession(backendOverride: own, workingDirectory: trusted.path);
+      own.eventCtrl.add(_request('Bash', {'command': 'ls'}));
+      expect(own.decisions, isEmpty);
       expect(asked, hasLength(1));
     });
 
@@ -224,47 +206,96 @@ void main() {
     });
   });
 
-  group('Antigravity 명령 자동 승인', () {
-    late _FakeBackend agy;
+  group('파괴적 작업 판별', () {
+    bool isDestructive(String command) =>
+        ApprovalRequestData.detectDestructive('Bash', {'command': command});
 
-    void createAgySession(String folder) {
-      agy = _FakeBackend();
-      manager.createSession(
-        sessionId: 'agy',
-        backendType: BackendType.antigravity,
-        backendOverride: agy,
-        workingDirectory: folder,
-      );
-    }
-
-    test('신뢰 폴더의 일반 명령은 묻지 않고 파괴적 명령은 묻는다', () {
-      createAgySession(trusted.path);
-      agy.eventCtrl.add(_request('run_command', {'CommandLine': 'find lib'}));
-      expect(agy.decisions.single.approved, isTrue);
-      expect(asked, isEmpty);
-
-      agy.eventCtrl.add(
-        _request('run_command', {'CommandLine': 'rm -rf build'}, id: 'r2'),
-      );
-      expect(agy.decisions, hasLength(1));
-      expect(asked, hasLength(1));
+    test('삭제·덮어쓰기·강제 푸시 명령을 잡는다', () {
+      for (final command in [
+        'rm a.txt',
+        'rm -rf build',
+        'cd x && rm b',
+        'xargs rm',
+        'rmdir old',
+        'find . -name x -delete',
+        'git rm a',
+        'git clean -fd',
+        'git reset --hard HEAD~1',
+        'git checkout -- lib/a.dart',
+        'git checkout .',
+        'git restore lib/a.dart',
+        'git branch -D feature',
+        'git tag -d v1',
+        'git stash drop',
+        'git worktree remove x',
+        'git push --force origin main',
+        'git push -f origin main',
+        'git push origin --delete feature',
+        'git push origin +main',
+        'sudo reboot',
+        'dd if=/dev/zero of=/dev/disk1',
+        'truncate -s 0 a.log',
+        'psql -c "DROP TABLE users"',
+        'DELETE FROM users',
+        'kubectl delete pod x',
+        'terraform destroy',
+        'docker system prune',
+        'gh repo delete x',
+      ]) {
+        expect(isDestructive(command), isTrue, reason: command);
+      }
     });
 
-    test('신뢰하지 않은 폴더의 명령은 묻는다', () {
-      createAgySession(other.path);
-      agy.eventCtrl.add(_request('run_command', {'CommandLine': 'find lib'}));
-      expect(agy.decisions, isEmpty);
-      expect(asked, hasLength(1));
+    test('일반 개발 명령은 파괴적으로 보지 않는다', () {
+      for (final command in [
+        'ls -la',
+        'find lib -name "*.dart"',
+        'flutter test',
+        'firmware --version',
+        'git status',
+        'git add .',
+        'git commit -m "문서 정리"',
+        'git push origin main',
+        'git push origin feature-force',
+        'git checkout develop',
+        'git checkout -b feature',
+        'git branch feature',
+        'git worktree add x',
+        'npm install',
+        'grep -r delete lib',
+      ]) {
+        expect(isDestructive(command), isFalse, reason: command);
+      }
+    });
+
+    test('파일 내용은 판별하지 않고 도구 이름은 판별한다', () {
+      expect(
+        ApprovalRequestData.detectDestructive('Write', {
+          'file_path': 'clean.sh',
+          'content': 'rm -rf build',
+        }),
+        isFalse,
+      );
+      expect(
+        ApprovalRequestData.detectDestructive('delete_file', {'Path': 'a'}),
+        isTrue,
+      );
     });
   });
 
-  group('자동 권한 모드', () {
-    test('백엔드별 자동 모드로 시작하고 건너뛰기 옵션은 쓰지 않는다', () async {
-      final spawner = _Spawner();
-      final claude = ClaudeCodeAdapter(spawner: spawner);
-      final codex = CodexAdapter(spawner: spawner);
-      final bridge = LocalHookBridgeServer();
-      final agy = AntigravityAdapter(
+  group('권한 모드', () {
+    late _Spawner spawner;
+    late ClaudeCodeAdapter claude;
+    late CodexAdapter codex;
+    late AntigravityAdapter agy;
+    late LocalHookBridgeServer bridge;
+
+    setUp(() {
+      spawner = _Spawner();
+      claude = ClaudeCodeAdapter(spawner: spawner);
+      codex = CodexAdapter(spawner: spawner);
+      bridge = LocalHookBridgeServer();
+      agy = AntigravityAdapter(
         spawner: spawner,
         hookBridge: bridge,
         userSettingsFile: File('/nonexistent/settings.json'),
@@ -275,26 +306,118 @@ void main() {
         await agy.dispose();
         await bridge.dispose();
       });
+    });
+
+    Future<List<List<String>>> argsFor(PermissionMode mode) async {
+      spawner.arguments.clear();
       AgentSessionConfig config(BackendType backend) => AgentSessionConfig(
         sessionId: 's',
         backendType: backend,
         workingDirectory: '/tmp',
+        permissionMode: mode,
       );
       await claude.start(config(BackendType.claudeCode));
       await agy.start(config(BackendType.antigravity));
       await codex.start(config(BackendType.codex));
       await codex.send('요청');
+      return List.of(spawner.arguments);
+    }
 
-      final claudeArgs = spawner.arguments[0];
-      expect(claudeArgs[claudeArgs.indexOf('--permission-mode') + 1], 'auto');
-      final agyArgs = spawner.arguments[1];
-      expect(agyArgs[agyArgs.indexOf('--mode') + 1], 'auto');
-      final codexArgs = spawner.arguments[2];
-      expect(codexArgs, contains('--approve-for-me'));
-      expect(codexArgs, isNot(contains('-s')), reason: '함께 쓸 수 없는 옵션');
-      for (final args in spawner.arguments) {
-        expect(args.join(' '), isNot(contains('dangerously')));
+    String after(List<String> args, String flag) =>
+        args[args.indexOf(flag) + 1];
+
+    test('모드별로 각 CLI의 옵션을 고른다', () async {
+      var [c, a, x] = await argsFor(PermissionMode.auto);
+      expect(after(c, '--permission-mode'), 'manual', reason: '앱이 판별한다');
+      expect(after(a, '--mode'), 'auto');
+      expect(x, contains('--approve-for-me'));
+      expect(x, isNot(contains('-s')), reason: '함께 쓸 수 없다');
+
+      [c, a, x] = await argsFor(PermissionMode.manual);
+      expect(after(c, '--permission-mode'), 'manual');
+      expect(a, isNot(contains('--mode')));
+      expect(after(x, '-s'), 'read-only');
+
+      [c, a, x] = await argsFor(PermissionMode.acceptEdits);
+      expect(after(c, '--permission-mode'), 'acceptEdits');
+      expect(after(a, '--mode'), 'accept-edits');
+      expect(after(x, '-s'), 'workspace-write');
+
+      [c, a, x] = await argsFor(PermissionMode.plan);
+      expect(after(c, '--permission-mode'), 'plan');
+      expect(after(a, '--mode'), 'plan');
+      expect(after(x, '-s'), 'read-only');
+    });
+
+    test('건너뛰기 옵션은 권한 무시 모드에서만 쓴다', () async {
+      for (final mode in PermissionMode.values) {
+        final all = await argsFor(mode);
+        for (final args in all) {
+          expect(
+            args.join(' ').contains('dangerously'),
+            mode == PermissionMode.bypass,
+            reason: '$mode',
+          );
+        }
       }
+    });
+
+    SessionManager managerWith(PermissionMode mode) {
+      final created = SessionManager(
+        trustedFolders: store,
+        defaultPermissionMode: mode,
+        onApprovalRequired: (session, request) => asked.add(request),
+      );
+      addTearDown(created.dispose);
+      return created;
+    }
+
+    void send(_FakeBackend own, ApprovalRequestEvent event) =>
+        own.eventCtrl.add(event);
+
+    test('모드별로 자동 승인 범위가 다르다', () {
+      final edit = _request('Write', {'file_path': '${trusted.path}/a'});
+      final read = _request('Read', {'file_path': '/etc/hosts'}, id: 'r2');
+      final command = _request('Bash', {'command': 'ls'}, id: 'r3');
+      final destructive = _request('Bash', {'command': 'rm a'}, id: 'r4');
+      final expected = {
+        PermissionMode.auto: 3,
+        PermissionMode.manual: 0,
+        PermissionMode.acceptEdits: 2,
+        PermissionMode.plan: 0,
+        PermissionMode.bypass: 4,
+      };
+      for (final MapEntry(key: mode, value: count) in expected.entries) {
+        final own = _FakeBackend();
+        managerWith(mode).createSession(
+          backendOverride: own,
+          workingDirectory: trusted.path,
+        );
+        for (final event in [edit, read, command, destructive]) {
+          send(own, event);
+        }
+        expect(own.decisions, hasLength(count), reason: '$mode');
+        expect(own.decisions.every((d) => d.approved), isTrue);
+      }
+    });
+
+    test('하위 세션은 상위 세션의 모드를 이어받고 바꾸면 다음 프롬프트에 적용한다', () async {
+      final subject = managerWith(PermissionMode.auto);
+      final own = _FakeBackend();
+      final session = subject.createSession(
+        sessionId: 'p',
+        backendOverride: own,
+        workingDirectory: trusted.path,
+      );
+      await subject.sendPrompt('p', '요청');
+      expect(own.lastConfig!.permissionMode, PermissionMode.auto);
+      expect(own.lastConfig!.trustedDirectories, isNotEmpty);
+
+      subject.updateSessionPermissionMode('p', PermissionMode.manual);
+      expect(session.isStarted, isFalse);
+      await subject.sendPrompt('p', '요청');
+      expect(own.lastConfig!.permissionMode, PermissionMode.manual);
+      expect(own.lastConfig!.trustedDirectories, isEmpty, reason: '수동은 항상 확인');
     });
   });
 

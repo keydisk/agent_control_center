@@ -140,6 +140,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         modelPreferences: guarded ? ModelPreferenceStore.load() : null,
         groups: guarded ? WorkspaceGroupStore.load() : null,
         useHelperAgent: guarded,
+        defaultPermissionMode: guarded
+            ? PermissionMode.auto
+            : PermissionMode.manual,
         autoIsolateWithWorktree: guarded,
         onFolderTrustRequired: _confirmFolderTrust,
         onApprovalRequired: (session, req) {
@@ -469,6 +472,42 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       ),
     );
     if (confirmed == true) _sessionManager.deleteGroup(groupId);
+  }
+
+  /// 권한 무시는 파괴적 작업까지 묻지 않으므로 켜기 전에 한 번 더 확인합니다.
+  Future<void> _changePermissionMode(
+    String sessionId,
+    PermissionMode mode,
+  ) async {
+    if (mode == PermissionMode.bypass) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          key: const ValueKey('bypass_mode_dialog'),
+          title: const Text('권한 무시를 켤까요?'),
+          content: const Text(
+            '이 세션의 에이전트가 파일 삭제와 강제 푸시 같은 파괴적인 작업도 묻지 않고 실행합니다.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              key: const ValueKey('confirm_bypass_mode_button'),
+              style: FilledButton.styleFrom(
+                backgroundColor: context.mac.red,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('활성화'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    _sessionManager.updateSessionPermissionMode(sessionId, mode);
   }
 
   Future<void> _openSessionSettings(String sessionId) async {
@@ -867,6 +906,11 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                       );
                     }
                   },
+                  selectedPermissionMode:
+                      active?.permissionMode ?? PermissionMode.manual,
+                  onPermissionModeChanged: active == null
+                      ? null
+                      : (mode) => _changePermissionMode(active.sessionId, mode),
                   selectedEffort: active?.effort ?? ReasoningEffort.auto,
                   onEffortChanged: (effort) {
                     if (active != null) {

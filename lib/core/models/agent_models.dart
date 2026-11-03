@@ -182,6 +182,19 @@ enum ReasoningEffort {
   final String label;
 }
 
+/// 세션의 권한 처리 방식
+enum PermissionMode {
+  auto('자동', '파괴적인 작업만 묻고 나머지는 자동으로 허용합니다'),
+  manual('수동', '변경하기 전에 항상 확인합니다'),
+  acceptEdits('편집 자동 수락', '파일 읽기·편집은 자동으로 허용하고 명령은 확인합니다'),
+  plan('계획', '변경하기 전에 계획을 세웁니다'),
+  bypass('권한 무시', '모든 권한 확인을 건너뜁니다. 파괴적인 작업도 묻지 않습니다');
+
+  const PermissionMode(this.label, this.description);
+  final String label;
+  final String description;
+}
+
 enum ApprovalScope {
   once('이번만 허용'),
   session('이 세션 동안 허용'),
@@ -241,12 +254,26 @@ class ApprovalRequestData {
     if (lowerTool.contains('delete') || lowerTool.contains('remove')) {
       return true;
     }
-    final joined = jsonEncode(args).toLowerCase();
+    final command = args['CommandLine'] ?? args['command'] ?? args['cmd'];
+    // 파일 내용에 'rm -rf'가 적혀 있는 것과 실행하는 것은 다르므로 파일 도구는 내용을 보지 않습니다.
+    const pathKeys = ['file_path', 'notebook_path', 'Path', 'TargetFile', 'path'];
+    if (command == null && pathKeys.any(args.containsKey)) return false;
+    final joined = (command ?? jsonEncode(args)).toString().toLowerCase();
+    // ponytail: 명령 문자열 패턴 판별이라 스크립트 안의 삭제나 우회 표현은 못 잡습니다. 놓친 패턴은 여기에 더합니다.
     final destructivePatterns = [
-      RegExp(r'\brm\s+(-[rRf]+\s+|/)'),
-      RegExp(r'\bgit\s+push\s+.*(--force|-f)\b'),
-      RegExp(r'\bgit\s+reset\s+--hard\b'),
-      RegExp(r'\bdrop\s+(table|database)\b'),
+      RegExp(r'\b(rm|rmdir|unlink|shred|mkfs(\.\w+)?)(\s|$)'),
+      RegExp(r'\btruncate\s|\bdd\s.*\bof=|\bfind\s.*\s-delete\b'),
+      RegExp(r'\bsudo\s|\bdiskutil\s+(erase|partition|apfs\s+delete)'),
+      RegExp(r'\bgit\s+push\b.*(--force|\s-f\b|--delete|\s-d\b|\s\+\S)'),
+      RegExp(r'\bgit\s+reset\s+--hard\b|\bgit\s+clean\s'),
+      RegExp(r'\bgit\s+checkout\s+(--\s|\.(\s|$))|\bgit\s+restore\s'),
+      RegExp(r'\bgit\s+(branch|tag)\s+(-d|--delete)\b'),
+      RegExp(r'\bgit\s+stash\s+(drop|clear)\b|\bgit\s+worktree\s+remove\b'),
+      RegExp(r'\bgit\s+filter-(branch|repo)\b'),
+      RegExp(r'\bdrop\s+(table|database|schema)\b|\bdelete\s+from\s'),
+      RegExp(r'\bkubectl\s+delete\b|\bterraform\s+destroy\b'),
+      RegExp(r'\bdocker\s+(rm|rmi|system\s+prune|volume\s+rm)\b'),
+      RegExp(r'\bgh\s+\w+\s+delete\b|\bnpm\s+unpublish\b'),
       RegExp(r'\bsend_message\b|\bsend_email\b|\bsendmail\b'),
       RegExp(r'clearbrowsercookies|clearbrowsercache'),
     ];

@@ -100,13 +100,16 @@ class AntigravityAdapter implements AgentBackend {
         '--conversation',
         config.conversationId!,
       ],
-      if (config.autoApproveBypassEnabled)
+      if (config.skipsPermissions)
         '--dangerously-skip-permissions'
-      else ...[
-        // 지원하지 않는 계정이면 agy가 경고만 내고 기본 모드로 실행합니다.
-        '--mode',
-        'auto',
-      ],
+      else
+        ...switch (config.permissionMode) {
+          // 지원하지 않는 계정이면 agy가 경고만 내고 기본 모드로 실행합니다.
+          PermissionMode.auto => ['--mode', 'auto'],
+          PermissionMode.acceptEdits => ['--mode', 'accept-edits'],
+          PermissionMode.plan => ['--mode', 'plan'],
+          _ => const <String>[],
+        },
       if (_allowedRules.isNotEmpty || config.trustedDirectories.isNotEmpty) ...[
         '--settings',
         jsonEncode({
@@ -322,6 +325,7 @@ class AntigravityAdapter implements AgentBackend {
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
         trustedDirectories: config.trustedDirectories,
+        permissionMode: config.permissionMode,
       ),
     );
   }
