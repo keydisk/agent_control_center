@@ -12,6 +12,7 @@ import 'package:path/path.dart' as p;
 import 'core/backend/agent_backend.dart';
 import 'core/models/agent_models.dart';
 import 'services/effort_preference_store.dart';
+import 'services/model_preference_store.dart';
 import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
 import 'services/permission_center.dart';
@@ -136,6 +137,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         permissionCenter: guarded ? PermissionCenter.load() : null,
         trustedFolders: guarded ? TrustedFolderStore.load() : null,
         effortPreferences: guarded ? EffortPreferenceStore.load() : null,
+        modelPreferences: guarded ? ModelPreferenceStore.load() : null,
         groups: guarded ? WorkspaceGroupStore.load() : null,
         useHelperAgent: guarded,
         autoIsolateWithWorktree: guarded,
@@ -323,7 +325,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       context: context,
       builder: (ctx) => NewSessionDialog(
         initialBackend: initialBackend,
-        initialModel: fallback?.model,
+        initialModel:
+            _sessionManager.modelPreferences?.modelFor(initialBackend) ??
+            fallback?.model,
         initialEffort:
             efforts?.effortFor(initialBackend) ??
             fallback?.effort ??
@@ -331,6 +335,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         initialFolder: fallback?.workingDirectory ?? Directory.current.path,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: efforts,
+        modelPreferences: _sessionManager.modelPreferences,
         showInstructions: true,
       ),
     );
@@ -352,6 +357,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         initialFolder: group.folder,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
+        modelPreferences: _sessionManager.modelPreferences,
         showInstructions: true,
         lockFolder: true,
         previousSessions: store.snapshotsFor(groupId),
@@ -363,6 +369,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
   void _createSessionFrom(NewSessionRequest request, {String? groupId}) {
     _sessionManager.effortPreferences?.remember(request.backend, request.effort);
+    _sessionManager.modelPreferences?.remember(request.backend, request.model);
     final session = _sessionManager.createSession(
       title: request.title,
       backendType: request.backend,
@@ -392,6 +399,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         initialInstructions: parent.instructions,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
+        modelPreferences: _sessionManager.modelPreferences,
         showInstructions: true,
         lockFolder: parent.groupId != null,
         note: '상위 세션의 컨텍스트를 압축해 가져갑니다.',
@@ -399,6 +407,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     );
     if (request == null || _sessionById(parentSessionId) == null) return;
     _sessionManager.effortPreferences?.remember(request.backend, request.effort);
+    _sessionManager.modelPreferences?.remember(request.backend, request.model);
     _sessionManager.createChildSession(
       parentSessionId,
       title: request.title,
@@ -423,9 +432,14 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
             Directory.current.path,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
+        modelPreferences: _sessionManager.modelPreferences,
       ),
     );
     if (result == null) return;
+    _sessionManager.modelPreferences?.remember(
+      result.group.backend,
+      result.group.model,
+    );
     _sessionManager.saveGroup(
       result.group,
       defaultInstructions: result.defaultInstructions,
@@ -466,6 +480,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         session: session,
         trustedFolders: _sessionManager.trustedFolders,
         effortPreferences: _sessionManager.effortPreferences,
+        modelPreferences: _sessionManager.modelPreferences,
       ),
     );
     // 다이얼로그가 열린 사이 세션이 삭제되었을 수 있습니다.

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/effort_preference_store.dart';
+import '../../services/model_preference_store.dart';
 import '../../services/session_manager.dart';
 import '../../services/trusted_folder_store.dart';
 import '../../services/workspace_group_store.dart';
@@ -263,6 +264,7 @@ class NewSessionDialog extends StatefulWidget {
     this.initialEffort = ReasoningEffort.auto,
     this.trustedFolders,
     this.effortPreferences,
+    this.modelPreferences,
     this.title = '새 세션',
     this.note,
     this.showInstructions = false,
@@ -285,6 +287,7 @@ class NewSessionDialog extends StatefulWidget {
   final String initialFolder;
   final TrustedFolderStore? trustedFolders;
   final EffortPreferenceStore? effortPreferences;
+  final ModelPreferenceStore? modelPreferences;
 
   @override
   State<NewSessionDialog> createState() => _NewSessionDialogState();
@@ -303,7 +306,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
         _backend.baseModel(widget.initialModel ?? ''),
       )
       ? _backend.baseModel(widget.initialModel!)
-      : _backend.defaultModel;
+      : widget.modelPreferences?.modelFor(_backend) ?? _backend.defaultModel;
   late ReasoningEffort _effort = _backend.resolveEffort(
     widget.initialEffort,
     widget.initialModel ?? _backend.defaultModel,
@@ -371,8 +374,9 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
               value: _backend,
               onChanged: (b) => setState(() {
                 _backend = b;
-                _model = b.defaultModel;
-                _effort = widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
+                _model = widget.modelPreferences?.modelFor(b) ?? b.defaultModel;
+                _effort =
+                    widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
               }),
             ),
             const SizedBox(height: 12),
@@ -488,6 +492,7 @@ class WorkspaceGroupDialog extends StatefulWidget {
     this.group,
     this.trustedFolders,
     this.effortPreferences,
+    this.modelPreferences,
   });
 
   final WorkspaceGroup? group;
@@ -495,6 +500,7 @@ class WorkspaceGroupDialog extends StatefulWidget {
   final String initialFolder;
   final TrustedFolderStore? trustedFolders;
   final EffortPreferenceStore? effortPreferences;
+  final ModelPreferenceStore? modelPreferences;
 
   @override
   State<WorkspaceGroupDialog> createState() => _WorkspaceGroupDialogState();
@@ -512,7 +518,10 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
     text: widget.group?.instructions,
   );
   late BackendType _backend = widget.group?.backend ?? BackendType.antigravity;
-  late String _model = widget.group?.model ?? _backend.defaultModel;
+  late String _model =
+      widget.group?.model ??
+      widget.modelPreferences?.modelFor(_backend) ??
+      _backend.defaultModel;
   late ReasoningEffort _effort =
       widget.group?.effort ??
       widget.effortPreferences?.effortFor(_backend) ??
@@ -595,7 +604,8 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
                 value: _backend,
                 onChanged: (b) => setState(() {
                   _backend = b;
-                  _model = b.defaultModel;
+                  _model =
+                      widget.modelPreferences?.modelFor(b) ?? b.defaultModel;
                   _effort =
                       widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
                 }),
@@ -662,11 +672,13 @@ class SessionSettingsDialog extends StatefulWidget {
     required this.session,
     this.trustedFolders,
     this.effortPreferences,
+    this.modelPreferences,
   });
 
   final ManagedSession session;
   final TrustedFolderStore? trustedFolders;
   final EffortPreferenceStore? effortPreferences;
+  final ModelPreferenceStore? modelPreferences;
 
   @override
   State<SessionSettingsDialog> createState() => _SessionSettingsDialogState();
@@ -774,8 +786,12 @@ class _SessionSettingsDialogState extends State<SessionSettingsDialog> {
                   ? null
                   : (b) => setState(() {
                       _backend = b;
-                      _model = b.defaultModel;
-                      _effort = widget.effortPreferences?.effortFor(b) ?? b.defaultEffort;
+                      _model =
+                          widget.modelPreferences?.modelFor(b) ??
+                          b.defaultModel;
+                      _effort =
+                          widget.effortPreferences?.effortFor(b) ??
+                          b.defaultEffort;
                     }),
             ),
             const SizedBox(height: 12),
