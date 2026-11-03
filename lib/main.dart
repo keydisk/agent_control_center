@@ -959,7 +959,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
             ),
             IconButton(
               key: const ValueKey('kv_cache_toggle'),
-              tooltip: 'KV 캐시 ${_showKvCachePanel ? '숨기기' : '보기'}',
+              tooltip: '사용량·KV 캐시 ${_showKvCachePanel ? '숨기기' : '보기'}',
               isSelected: _showKvCachePanel,
               selectedIcon: Icon(Icons.memory, color: mac.blue),
               icon: const Icon(Icons.memory),

@@ -13,6 +13,7 @@ import 'package:agent_control_center/services/permission_center.dart';
 import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/trusted_folder_store.dart';
 import 'package:agent_control_center/services/workspace_group_store.dart';
+import 'package:agent_control_center/ui/widgets/kv_cache_panel.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -198,6 +199,49 @@ void main() {
       expect(panel, findsNothing);
       await tap(tester, 'kv_cache_toggle');
       expect(panel, findsOneWidget);
+    });
+
+    testWidgets('오른쪽 사이드바 그래프가 가장 많이 쓴 백엔드 기준으로 사용량을 그린다', (tester) async {
+      LinearProgressIndicator bar(BackendType b) =>
+          tester.widget<LinearProgressIndicator>(
+            find.byKey(ValueKey('usage_bar_${b.id}')),
+          );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Row(
+              children: [
+                KvCachePanel(
+                  session: TokenUsage(totalTokens: 100),
+                  usageByBackend: {
+                    BackendType.codex: TokenUsage(totalTokens: 400),
+                    BackendType.claudeCode: TokenUsage(totalTokens: 100),
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(bar(BackendType.codex).value, 1);
+      expect(bar(BackendType.claudeCode).value, 0.25);
+      expect(bar(BackendType.antigravity).value, 0);
+      expect(find.text('100 tok'), findsNWidgets(2));
+      expect(find.text('400 tok'), findsOneWidget);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: Row(
+              children: [
+                KvCachePanel(session: TokenUsage(), usageByBackend: {}),
+              ],
+            ),
+          ),
+        ),
+      );
+      expect(bar(BackendType.codex).value, 0);
     });
 
     testWidgets('낮고 좁은 창에서도 사이드바가 넘치지 않는다', (tester) async {
