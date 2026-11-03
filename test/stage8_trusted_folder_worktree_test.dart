@@ -347,7 +347,7 @@ void main() {
             activeSessionId: 's1',
             usageByBackend: const {},
             onSelectSession: (_) {},
-            onCreateSession: (_) {},
+            onNewSession: (_) {},
             onStopSession: (_) {},
             onRetrySession: (_) {},
             onRerunWithBackend: (_, _) {},

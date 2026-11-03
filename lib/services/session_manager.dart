@@ -451,23 +451,56 @@ class SessionManager extends ChangeNotifier {
     final commit = await _gitOutput(baseDir, ['rev-parse', '--short', target]);
     session.worktreeLinks.last = link.merged(commit ?? link.baseBranch);
     // 미커밋 파일이 남아 제거가 거부되면 작업 손실을 막기 위해 worktree를 유지합니다.
+    if (await _removeWorktree(baseDir, link)) {
+      session.isolatedWorktreePath = null;
+      session.isStarted = false;
+      session.conversationIdToResume = null;
+    }
+    _refreshAllConflictFlags();
+    notifyListeners();
+  }
+
+  Future<bool> _removeWorktree(String baseDir, WorktreeLink link) async {
     final removed = await _runGit(baseDir, [
       'worktree',
       'remove',
       link.worktreeRoot,
     ]);
-    if (removed.exitCode == 0) {
-      await _runGit(baseDir, ['branch', '-d', link.branch]);
-      session.isolatedWorktreePath = null;
-      session.isStarted = false;
-      session.conversationIdToResume = null;
-      final parent = Directory(p.dirname(link.worktreeRoot));
-      if (p.basename(parent.path).startsWith('acc_worktree_')) {
-        await parent.delete().then<void>((_) {}, onError: (_) {});
-      }
+    if (removed.exitCode != 0) return false;
+    await _runGit(baseDir, ['branch', '-d', link.branch]);
+    final parent = Directory(p.dirname(link.worktreeRoot));
+    if (p.basename(parent.path).startsWith('acc_worktree_')) {
+      await parent.delete().then<void>((_) {}, onError: (_) {});
+    }
+    return true;
+  }
+
+  /// 세션을 중지·제거합니다. 변경이 남은 worktree는 지우지 않고 그 경로를 돌려줍니다.
+  Future<String?> deleteSession(String sessionId) async {
+    final session = _sessions.remove(sessionId);
+    if (session == null) return null;
+    if (_activeSessionId == sessionId) {
+      _activeSessionId = _sessions.keys.lastOrNull;
     }
     _refreshAllConflictFlags();
     notifyListeners();
+    await session.eventSub?.cancel();
+    await session.logSub?.cancel();
+    await session.backend.dispose();
+
+    final link = session.activeWorktreeLink;
+    if (link == null) return null;
+    final dirty = await _gitOutput(link.worktreeRoot, [
+      'status',
+      '--porcelain',
+    ]);
+    final tip = await _gitOutput(link.worktreeRoot, ['rev-parse', 'HEAD']);
+    if (dirty == null || dirty.isNotEmpty || tip != link.startCommit) {
+      return link.worktreeRoot;
+    }
+    return await _removeWorktree(session.workingDirectory, link)
+        ? null
+        : link.worktreeRoot;
   }
 
   Future<void> _ensureFolderTrusted(ManagedSession session) async {
@@ -671,7 +704,10 @@ class SessionManager extends ChangeNotifier {
   ) async {
     final session = _sessions[sessionId];
     if (session == null) return;
-    final finalDecision = _permissionCenter.recordDecision(request, rawDecision);
+    final finalDecision = _permissionCenter.recordDecision(
+      request,
+      rawDecision,
+    );
     session.resolvedRequestIds.add(request.id);
     if (session.status == SessionStatus.awaitingApproval) {
       session.status = SessionStatus.running;
@@ -760,6 +796,13 @@ class SessionManager extends ChangeNotifier {
       session.isStarted = false;
       _bindSessionStreams(session);
     }
+    notifyListeners();
+  }
+
+  void updateSessionTitle(String sessionId, String title) {
+    final session = _sessions[sessionId];
+    if (session == null || session.title == title) return;
+    session.title = title;
     notifyListeners();
   }
 

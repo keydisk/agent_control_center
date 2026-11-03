@@ -10,7 +10,9 @@ class TrustedFolderStore {
     final f = file;
     if (f == null || !f.existsSync()) return;
     try {
-      _folders.addAll((jsonDecode(f.readAsStringSync()) as List).cast<String>());
+      _folders.addAll(
+        (jsonDecode(f.readAsStringSync()) as List).cast<String>(),
+      );
     } on Exception catch (_) {
       // 손상된 파일은 신뢰 없음으로 취급하고 다시 묻습니다.
     } on TypeError catch (_) {
@@ -32,9 +34,14 @@ class TrustedFolderStore {
 
   List<String> get folders => List.unmodifiable(_folders);
 
-  bool isTrusted(String path) {
+  bool isTrusted(String path) => coveringFolders(path).isNotEmpty;
+
+  /// 이 경로에 신뢰를 주는 등록 폴더들. 상위 폴더 등록도 포함합니다.
+  List<String> coveringFolders(String path) {
     final target = _canonical(path);
-    return _folders.any((f) => f == target || p.isWithin(f, target));
+    return _folders
+        .where((f) => f == target || p.isWithin(f, target))
+        .toList(growable: false);
   }
 
   void add(String path) {

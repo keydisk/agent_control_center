@@ -21,6 +21,7 @@ import 'ui/widgets/approval_and_question_dialogs.dart';
 import 'ui/widgets/mac_window_drag_area.dart';
 import 'ui/widgets/multi_session_sidebar.dart';
 import 'ui/widgets/prompt_input_bar.dart';
+import 'ui/widgets/session_dialogs.dart';
 import 'ui/widgets/timeline_widgets.dart';
 
 void main() {
@@ -233,6 +234,75 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     return trusted ?? false;
   }
 
+  ManagedSession? _sessionById(String? sessionId) => _sessionManager.sessions
+      .where((s) => s.sessionId == sessionId)
+      .firstOrNull;
+
+  Future<void> _openNewSessionDialog(String? sourceSessionId) async {
+    final source =
+        _sessionById(sourceSessionId) ?? _sessionManager.activeSession;
+    final request = await showDialog<NewSessionRequest>(
+      context: context,
+      builder: (ctx) => NewSessionDialog(
+        initialBackend: source?.backendType ?? BackendType.antigravity,
+        initialFolder: source?.workingDirectory ?? Directory.current.path,
+        trustedFolders: _sessionManager.trustedFolders,
+      ),
+    );
+    if (request == null) return;
+    _sessionManager.createSession(
+      backendType: request.backend,
+      workingDirectory: request.folder,
+    );
+  }
+
+  Future<void> _openSessionSettings(String sessionId) async {
+    final session = _sessionById(sessionId);
+    if (session == null) return;
+    final result = await showDialog<SessionSettingsResult>(
+      context: context,
+      builder: (ctx) => SessionSettingsDialog(
+        session: session,
+        trustedFolders: _sessionManager.trustedFolders,
+      ),
+    );
+    // 다이얼로그가 열린 사이 세션이 삭제되었을 수 있습니다.
+    if (result == null || _sessionById(sessionId) == null) {
+      if (mounted) setState(() {});
+      return;
+    }
+    _sessionManager.updateSessionTitle(sessionId, result.title);
+    if (result.backend != session.backendType) {
+      _sessionManager.updateSessionBackend(
+        sessionId,
+        result.backend,
+        model: result.model,
+        replaceAdapter: widget.backendOverride == null,
+      );
+    } else if (result.model != null) {
+      _sessionManager.updateSessionModel(sessionId, result.model!);
+    }
+    if (result.folder != session.workingDirectory) {
+      _sessionManager.updateSessionWorkingDirectory(sessionId, result.folder);
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _confirmDeleteSession(String sessionId) async {
+    final session = _sessionById(sessionId);
+    if (session == null) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => DeleteSessionDialog(session: session),
+    );
+    if (confirmed != true) return;
+    final kept = await _sessionManager.deleteSession(sessionId);
+    if (kept == null || !mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('변경 사항이 있어 worktree를 남겼습니다: $kept')));
+  }
+
   void _onManagerChanged() {
     if (mounted) {
       setState(() {});
@@ -317,12 +387,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
               activeSessionId: _sessionManager.activeSessionId,
               usageByBackend: _sessionManager.usageByBackend,
               onSelectSession: _sessionManager.selectSession,
-              onCreateSession: (backend) {
-                _sessionManager.createSession(
-                  backendType: backend,
-                  workingDirectory: workingDir,
-                );
-              },
+              onNewSession: _openNewSessionDialog,
+              onSessionSettings: _openSessionSettings,
+              onDeleteSession: _confirmDeleteSession,
               onStopSession: _sessionManager.stopSession,
               onRetrySession: _sessionManager.retrySession,
               onRerunWithBackend: (sessionId, backend) {
@@ -417,7 +484,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                         Expanded(
                           flex: 3,
                           child: events.isEmpty
-                              ? const _EmptyTimeline()
+                              ? _EmptyTimeline(hasSession: active != null)
                               : ListView.builder(
                                   padding: const EdgeInsets.all(16),
                                   itemCount: events.length,
@@ -654,9 +721,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           margin: const EdgeInsets.symmetric(vertical: 6),
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: isUser
-                ? context.mac.selection
-                : Colors.transparent,
+            color: isUser ? context.mac.selection : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
           child: Column(
@@ -769,7 +834,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 }
 
 class _EmptyTimeline extends StatelessWidget {
-  const _EmptyTimeline();
+  const _EmptyTimeline({required this.hasSession});
+
+  final bool hasSession;
 
   @override
   Widget build(BuildContext context) {
@@ -781,7 +848,7 @@ class _EmptyTimeline extends StatelessWidget {
           Icon(Icons.hub_outlined, size: 32, color: mac.tertiaryLabel),
           const SizedBox(height: 10),
           Text(
-            '아직 실행된 대화가 없습니다.',
+            hasSession ? '아직 실행된 대화가 없습니다.' : '세션이 없습니다.',
             style: TextStyle(
               fontSize: 14,
               fontWeight: FontWeight.w600,
@@ -790,7 +857,9 @@ class _EmptyTimeline extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            '하단 입력창에서 프롬프트를 입력해 주세요.',
+            hasSession
+                ? '하단 입력창에서 프롬프트를 입력해 주세요.'
+                : '사이드바 상단 버튼으로 새 세션을 만들어 주세요.',
             style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
           ),
         ],
