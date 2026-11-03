@@ -130,10 +130,10 @@ void main() {
           ),
         ),
       );
-      expect(find.text('추론 기본'), findsOneWidget);
+      expect(find.text('Effort: Default'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('effort_dropdown')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('최대').last);
+      await tester.tap(find.text('Max').last);
       await tester.pumpAndSettle();
       expect(picked, ReasoningEffort.max);
     });
@@ -172,7 +172,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('session_effort_claude')));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('높음').last);
+      await tester.tap(find.text('High').last);
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('create_session_button')));
       await tester.pumpAndSettle();
@@ -221,7 +221,7 @@ void main() {
           ),
         ),
       );
-      expect(find.text('추론 높음'), findsOneWidget);
+      expect(find.text('Effort: High'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('model_dropdown')));
       await tester.pumpAndSettle();
       expect(find.textContaining('flash-high'), findsNothing);
@@ -229,9 +229,9 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('effort_dropdown')));
       await tester.pumpAndSettle();
-      expect(find.text('낮음'), findsWidgets);
-      expect(find.text('최대'), findsNothing);
-      expect(find.text('기본'), findsNothing);
+      expect(find.text('Low'), findsWidgets);
+      expect(find.text('Max'), findsNothing);
+      expect(find.text('Default'), findsNothing);
     });
   });
 
@@ -257,7 +257,7 @@ void main() {
       );
       expect(session.model, 'gemini-3.8-flash');
       expect(session.effort, ReasoningEffort.medium);
-      expect(session.modelLabel, 'gemini-3.8-flash · 중간');
+      expect(session.modelLabel, 'gemini-3.8-flash · Medium');
     });
 
     test('백엔드를 바꾸면 그 백엔드의 기본 강도로 돌아간다', () {

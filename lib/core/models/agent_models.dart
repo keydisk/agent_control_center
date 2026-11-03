@@ -171,12 +171,12 @@ enum BackendType {
 
 /// CLI에 전달하는 추론 강도. [auto]는 옵션을 넘기지 않아 CLI·모델 기본값을 따릅니다.
 enum ReasoningEffort {
-  auto('기본'),
-  low('낮음'),
-  medium('중간'),
-  high('높음'),
-  xhigh('매우 높음'),
-  max('최대');
+  auto('Default'),
+  low('Low'),
+  medium('Medium'),
+  high('High'),
+  xhigh('XHigh'),
+  max('Max');
 
   const ReasoningEffort(this.label);
   final String label;
