@@ -605,74 +605,71 @@ class FileDiffViewerCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
         side: BorderSide(color: context.mac.separator, width: 0.5),
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: ExpansionTile(
+        initiallyExpanded: false,
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        title: Row(
           children: [
-            Row(
-              children: [
-                const Icon(Icons.difference_outlined, size: 18),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '파일 변경 Diff: ${event.diff.filePath}',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                      fontFamily: kMonoFont,
-                    ),
-                  ),
+            const Icon(Icons.difference_outlined, size: 18),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                '파일 변경 Diff: ${event.diff.filePath}',
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.bold,
+                  fontFamily: kMonoFont,
                 ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: BackendModelBadge(
-                    backend: event.backend,
-                    model: event.model,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: context.mac.codeBackground,
-                borderRadius: BorderRadius.circular(6),
               ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (final line in diffLines)
-                    Container(
-                      color: line.startsWith('+') && !line.startsWith('+++')
-                          ? context.mac.green.withValues(alpha: 0.18)
-                          : (line.startsWith('-') && !line.startsWith('---')
-                                ? context.mac.red.withValues(alpha: 0.18)
-                                : Colors.transparent),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 1,
-                      ),
-                      child: SelectableText(
-                        line,
-                        style: TextStyle(
-                          fontFamily: kMonoFont,
-                          fontSize: 11.5,
-                          color: line.startsWith('+') && !line.startsWith('+++')
-                              ? context.mac.green
-                              : (line.startsWith('-') && !line.startsWith('---')
-                                    ? context.mac.red
-                                    : context.mac.secondaryLabel),
-                        ),
-                      ),
-                    ),
-                ],
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: BackendModelBadge(
+                backend: event.backend,
+                model: event.model,
               ),
             ),
           ],
         ),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: context.mac.codeBackground,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                for (final line in diffLines)
+                  Container(
+                    color: line.startsWith('+') && !line.startsWith('+++')
+                        ? context.mac.green.withValues(alpha: 0.18)
+                        : (line.startsWith('-') && !line.startsWith('---')
+                              ? context.mac.red.withValues(alpha: 0.18)
+                              : Colors.transparent),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 1,
+                    ),
+                    child: SelectableText(
+                      line,
+                      style: TextStyle(
+                        fontFamily: kMonoFont,
+                        fontSize: 11.5,
+                        color: line.startsWith('+') && !line.startsWith('+++')
+                            ? context.mac.green
+                            : (line.startsWith('-') && !line.startsWith('---')
+                                  ? context.mac.red
+                                  : context.mac.secondaryLabel),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
