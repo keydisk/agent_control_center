@@ -1,3 +1,5 @@
+import 'dart:math' show max;
+
 import 'package:flutter/material.dart';
 
 import '../theme/mac_theme.dart';
@@ -835,6 +837,10 @@ class _BackendUsageFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     final mac = context.mac;
     final style = TextStyle(fontSize: 10.5, color: mac.secondaryLabel);
+    final maxTokens = usageByBackend.values.fold(
+      0,
+      (largest, usage) => max(largest, usage.totalTokens),
+    );
     return Padding(
       key: const ValueKey('backend_usage_summary'),
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
@@ -843,22 +849,43 @@ class _BackendUsageFooter extends StatelessWidget {
         children: [
           for (final b in BackendType.values)
             Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Row(
+              padding: const EdgeInsets.only(bottom: 5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(
-                    child: Text(
-                      b.displayName,
-                      overflow: TextOverflow.ellipsis,
-                      style: style,
-                    ),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          b.displayName,
+                          overflow: TextOverflow.ellipsis,
+                          style: style,
+                        ),
+                      ),
+                      Text(
+                        '${usageByBackend[b]?.totalTokens ?? 0} tok'
+                        '${(usageByBackend[b]?.costUsd ?? 0) > 0 ? ' · \$${usageByBackend[b]!.costUsd.toStringAsFixed(4)}' : ''}',
+                        style: style.copyWith(
+                          fontFamily: kMonoFont,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
                   ),
-                  Text(
-                    '${usageByBackend[b]?.totalTokens ?? 0} tok'
-                    '${(usageByBackend[b]?.costUsd ?? 0) > 0 ? ' · \$${usageByBackend[b]!.costUsd.toStringAsFixed(4)}' : ''}',
-                    style: style.copyWith(
-                      fontFamily: kMonoFont,
-                      fontFeatures: const [FontFeature.tabularFigures()],
+                  const SizedBox(height: 2),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(2),
+                    child: LinearProgressIndicator(
+                      key: ValueKey('sidebar_usage_bar_${b.id}'),
+                      value: maxTokens == 0
+                          ? 0
+                          : (usageByBackend[b]?.totalTokens ?? 0) / maxTokens,
+                      minHeight: 4,
+                      color: mac.blue,
+                      backgroundColor: mac.fill,
+                      semanticsLabel:
+                          '${b.displayName} 토큰 사용량 '
+                          '${usageByBackend[b]?.totalTokens ?? 0}',
                     ),
                   ),
                 ],

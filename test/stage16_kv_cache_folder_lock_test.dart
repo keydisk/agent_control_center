@@ -10,6 +10,7 @@ import 'package:agent_control_center/main.dart';
 import 'package:agent_control_center/services/inbox_service.dart';
 import 'package:agent_control_center/services/notification_service.dart';
 import 'package:agent_control_center/services/permission_center.dart';
+import 'package:agent_control_center/services/provider_usage_service.dart';
 import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/trusted_folder_store.dart';
 import 'package:agent_control_center/services/workspace_group_store.dart';
@@ -242,6 +243,94 @@ void main() {
         ),
       );
       expect(bar(BackendType.codex).value, 0);
+    });
+
+    testWidgets('Claude, Codex, Antigravity 공급자 한도와 캐시 적중률을 그래프와 숫자로 표시한다', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(1400, 1400);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+      LinearProgressIndicator barByKey(String key) =>
+          tester.widget<LinearProgressIndicator>(find.byKey(ValueKey(key)));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SizedBox(
+              height: 1200,
+              child: Row(
+                children: [
+                  KvCachePanel(
+                    session: const TokenUsage(totalTokens: 100),
+                    usageByBackend: const {
+                      BackendType.claudeCode: TokenUsage(
+                        cachedTokens: 40,
+                        promptTokens: 100,
+                        totalTokens: 150,
+                      ),
+                      BackendType.codex: TokenUsage(
+                        cachedTokens: 75,
+                        promptTokens: 100,
+                        totalTokens: 300,
+                      ),
+                      BackendType.antigravity: TokenUsage(
+                        cachedTokens: 50,
+                        promptTokens: 200,
+                        totalTokens: 200,
+                      ),
+                    },
+                    providerUsages: const [
+                      ProviderUsage(
+                        backend: BackendType.claudeCode,
+                        name: 'Claude Code',
+                        fiveHour: UsageWindow(42, null),
+                        weekly: UsageWindow(18, null),
+                      ),
+                      ProviderUsage(
+                        backend: BackendType.codex,
+                        name: 'OpenAI Codex',
+                        fiveHour: UsageWindow(60, null),
+                        weekly: UsageWindow(30, null),
+                        contextUsed: 32000,
+                        contextLimit: 128000,
+                      ),
+                      ProviderUsage(
+                        backend: BackendType.antigravity,
+                        name: 'Google Antigravity',
+                        fiveHour: UsageWindow(25, null),
+                        weekly: UsageWindow(10, null),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(barByKey('kv_cache_bar_claude').value, closeTo(0.4, 0.001));
+      expect(barByKey('kv_cache_bar_codex').value, closeTo(0.75, 0.001));
+      expect(barByKey('kv_cache_bar_agy').value, closeTo(0.25, 0.001));
+
+      expect(
+        barByKey('provider_five_hour_bar_claude_Claude Code').value,
+        closeTo(0.42, 0.001),
+      );
+      expect(
+        barByKey('provider_weekly_bar_codex_OpenAI Codex').value,
+        closeTo(0.30, 0.001),
+      );
+      expect(
+        barByKey('provider_context_bar_codex_OpenAI Codex').value,
+        closeTo(0.25, 0.001),
+      );
+      expect(
+        barByKey('provider_five_hour_bar_agy_Google Antigravity').value,
+        closeTo(0.25, 0.001),
+      );
+      expect(find.text('32000/128000 tok'), findsOneWidget);
     });
 
     testWidgets('낮고 좁은 창에서도 사이드바가 넘치지 않는다', (tester) async {

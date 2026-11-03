@@ -27,6 +27,13 @@ class ProviderUsage {
   final UsageWindow? weekly;
   final int? contextUsed;
   final int? contextLimit;
+
+  double get contextFraction {
+    final used = contextUsed;
+    final limit = contextLimit;
+    if (used == null || limit == null || limit <= 0) return 0;
+    return (used / limit).clamp(0.0, 1.0);
+  }
 }
 
 /// 공급자가 로컬 CLI/캐시에 공개한 값만 읽습니다. 계정 자격 증명은 읽지 않습니다.
@@ -52,14 +59,6 @@ class ProviderUsageService {
           cache['accountUuid'] != null &&
               cache['accountUuid'] !=
                   (root['oauthAccount'] as Map?)?['accountUuid']) {
-        return const [];
-      }
-      final fetched = (cache['fetchedAtMs'] as num?)?.toInt();
-      if (fetched == null ||
-          DateTime.now().difference(
-                DateTime.fromMillisecondsSinceEpoch(fetched),
-              ) >
-              const Duration(hours: 6)) {
         return const [];
       }
       final utilization = cache['utilization'] as Map<String, dynamic>?;
@@ -107,6 +106,18 @@ class ProviderUsageService {
         files.addAll(Directory(path).listSync().whereType<File>());
       } on FileSystemException {
         continue;
+      }
+    }
+    if (files.isEmpty) {
+      try {
+        files.addAll(
+          Directory('$home/sessions')
+              .listSync(recursive: true)
+              .whereType<File>()
+              .where((f) => f.path.endsWith('.jsonl')),
+        );
+      } on FileSystemException {
+        // 세션 폴더가 없으면 빈 목록으로 처리합니다.
       }
     }
     files.sort((a, b) => b.path.compareTo(a.path));
@@ -223,6 +234,7 @@ List<ProviderUsage> parseAntigravityUsage(String output) {
 }
 
 UsageWindow? _agyWindow(List buckets, {required bool weekly}) {
+  UsageWindow? fallback;
   for (final item in buckets) {
     if (item is! Map || item['disabled'] == true) continue;
     final label = [
@@ -237,12 +249,6 @@ UsageWindow? _agyWindow(List buckets, {required bool weekly}) {
         label.contains('7d') ||
         label.contains('seven');
     if (weekly != isWeek) continue;
-    if (!weekly &&
-        !label.contains('session') &&
-        !label.contains('hour') &&
-        !label.contains('5')) {
-      continue;
-    }
     final rawRemaining =
         item['remainingFraction'] ??
         item['remaining_fraction'] ??
@@ -259,7 +265,17 @@ UsageWindow? _agyWindow(List buckets, {required bool weekly}) {
               ?.toString() ??
           '',
     );
-    return UsageWindow((100 - remaining * 100).clamp(0, 100).toDouble(), reset);
+    final window = UsageWindow(
+      (100 - remaining * 100).clamp(0, 100).toDouble(),
+      reset,
+    );
+    if (weekly ||
+        label.contains('session') ||
+        label.contains('hour') ||
+        label.contains('5')) {
+      return window;
+    }
+    fallback ??= window;
   }
-  return null;
+  return fallback;
 }
