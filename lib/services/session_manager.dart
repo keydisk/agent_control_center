@@ -78,6 +78,7 @@ class ManagedSession {
     this.parentSessionId,
     this.instructions = '',
     this.autoTitle = false,
+    this.permissionMode = PermissionMode.manual,
     this.status = SessionStatus.idle,
     this.isStarted = false,
     this.hasDirectoryConflict = false,
@@ -101,6 +102,8 @@ class ManagedSession {
   final DateTime createdAt;
   String? groupId;
   String? parentSessionId;
+
+  PermissionMode permissionMode;
 
   /// 사용자가 이름을 정하지 않아 첫 대화로 이름을 지어야 하면 true입니다.
   bool autoTitle;
@@ -167,6 +170,7 @@ class SessionManager extends ChangeNotifier {
     this.modelPreferences,
     this.groups,
     this.useHelperAgent = false,
+    this.defaultPermissionMode = PermissionMode.manual,
     this.onChildWorktreeFinished,
     this.autoIsolateWithWorktree = false,
     this.onFolderTrustRequired,
@@ -204,6 +208,9 @@ class SessionManager extends ChangeNotifier {
 
   /// 기록 압축과 이름 짓기에 일회용 백엔드를 씁니다. 끄면 잘라낸 기록과 프롬프트 첫 줄을 씁니다.
   final bool useHelperAgent;
+
+  /// 부모 세션이 없는 새 세션의 권한 모드
+  final PermissionMode defaultPermissionMode;
   final void Function(
     ManagedSession parent,
     ManagedSession child,
@@ -293,6 +300,7 @@ class SessionManager extends ChangeNotifier {
     String instructions = '',
     String handoffTranscript = '',
     String handoffLabel = '',
+    PermissionMode? permissionMode,
   }) {
     _counter++;
     final id = sessionId ?? 'session_$_counter';
@@ -322,6 +330,7 @@ class SessionManager extends ChangeNotifier {
       parentSessionId: parentSessionId,
       instructions: instructions,
       autoTitle: title == null,
+      permissionMode: permissionMode ?? defaultPermissionMode,
       hasDirectoryConflict: conflicts.isNotEmpty,
       events: initialEvents != null ? List.of(initialEvents) : null,
       rawLogs: initialRawLogs != null ? List.of(initialRawLogs) : null,
@@ -371,6 +380,7 @@ class SessionManager extends ChangeNotifier {
       instructions: instructions ?? parent.instructions,
       handoffTranscript: buildSessionTranscript(parent.events),
       handoffLabel: '상위 세션 "${parent.title}"',
+      permissionMode: parent.permissionMode,
     );
   }
 
@@ -693,12 +703,12 @@ class SessionManager extends ChangeNotifier {
 
     session.eventSub = session.backend.events.listen((event) {
       if (event is ApprovalRequestEvent) {
-        if (_isTrustedFileAccess(session, event.request) ||
-            _isTrustedAntigravityCommand(session, event.request)) {
+        final preApproved = _permissionCenter.checkPreApproved(event.request);
+        if (preApproved == null &&
+            _canApproveAutomatically(session.permissionMode, event.request)) {
           _approveAutomatically(session, event.request);
           return;
         }
-        final preApproved = _permissionCenter.checkPreApproved(event.request);
         if (preApproved != null) {
           session.resolvedRequestIds.add(event.request.id);
           session.backend.respondToApproval(preApproved);
@@ -733,48 +743,38 @@ class SessionManager extends ChangeNotifier {
     });
   }
 
-  static const _fileReadTools = {'Read', 'view_file', 'read_file', 'list_dir'};
+  static const _fileReadTools = {
+    'Read',
+    'Glob',
+    'Grep',
+    'view_file',
+    'read_file',
+    'list_dir',
+  };
 
-  /// 신뢰 폴더 안의 파일 읽기·쓰기인지 판단합니다. 명령 실행과 파괴적 작업은 계속 묻습니다.
-  bool _isTrustedFileAccess(ManagedSession session, ApprovalRequestData req) {
-    final store = trustedFolders;
-    if (store == null ||
-        req.isDestructive ||
-        req.category == ApprovalCategory.destructive ||
-        (req.category != ApprovalCategory.fileWrite &&
-            !_fileReadTools.contains(req.toolName))) {
-      return false;
-    }
-    final path = [
-      req.arguments['file_path'],
-      req.arguments['notebook_path'],
-      req.arguments['Path'],
-      req.arguments['TargetFile'],
-      req.arguments['path'],
-    ].whereType<String>().firstOrNull;
-    if (path == null) return false;
-    final target = TrustedFolderStore.canonicalPath(
-      p.isAbsolute(path) ? path : p.join(session.effectiveDirectory, path),
-    );
-    if (store.isTrusted(target)) return true;
-    // worktree는 임시 폴더에 있어도 신뢰 폴더의 작업 사본입니다.
-    final root = TrustedFolderStore.canonicalPath(session.effectiveDirectory);
-    return store.isTrusted(session.workingDirectory) &&
-        (target == root || p.isWithin(root, target));
-  }
-
-  /// Auto 모드를 쓸 수 없는 계정의 agy는 일반 명령도 거부하므로 앱이 대신 승인합니다.
-  /// ponytail: 파괴적 판단은 detectDestructive 패턴에 의존합니다. agy Auto 모드를 쓸 수 있으면 이 경로는 거의 타지 않습니다.
-  bool _isTrustedAntigravityCommand(
-    ManagedSession session,
+  static bool _canApproveAutomatically(
+    PermissionMode mode,
     ApprovalRequestData req,
   ) {
-    final store = trustedFolders;
-    return store != null &&
-        session.backendType == BackendType.antigravity &&
-        req.category == ApprovalCategory.shellCommand &&
-        !req.isDestructive &&
-        store.isTrusted(session.workingDirectory);
+    final destructive =
+        req.isDestructive || req.category == ApprovalCategory.destructive;
+    return switch (mode) {
+      PermissionMode.bypass => true,
+      PermissionMode.auto => !destructive,
+      PermissionMode.acceptEdits =>
+        !destructive &&
+            (req.category == ApprovalCategory.fileWrite ||
+                _fileReadTools.contains(req.toolName)),
+      PermissionMode.manual || PermissionMode.plan => false,
+    };
+  }
+
+  void updateSessionPermissionMode(String sessionId, PermissionMode mode) {
+    final session = _sessions[sessionId];
+    if (session == null || session.permissionMode == mode) return;
+    session.permissionMode = mode;
+    _restartOnNextPrompt(session);
+    notifyListeners();
   }
 
   void _approveAutomatically(
@@ -789,7 +789,7 @@ class SessionManager extends ChangeNotifier {
           requestId: request.id,
           approved: true,
           scope: ApprovalScope.once,
-          reason: '신뢰 폴더 안의 작업 자동 승인',
+          reason: '${session.permissionMode.label} 모드 자동 승인',
         ),
       ),
     );
@@ -798,7 +798,12 @@ class SessionManager extends ChangeNotifier {
   /// CLI가 처음부터 승인 없이 접근할 폴더. 세션 폴더를 신뢰할 때만 넘깁니다.
   List<String> _trustedDirectories(ManagedSession session) {
     final store = trustedFolders;
-    if (store == null || !store.isTrusted(session.workingDirectory)) {
+    final asksBeforeEdits =
+        session.permissionMode == PermissionMode.manual ||
+        session.permissionMode == PermissionMode.plan;
+    if (asksBeforeEdits ||
+        store == null ||
+        !store.isTrusted(session.workingDirectory)) {
       return const [];
     }
     return {
@@ -1125,6 +1130,7 @@ class SessionManager extends ChangeNotifier {
             effort: session.effort,
             conversationId: session.conversationIdToResume,
             trustedDirectories: _trustedDirectories(session),
+            permissionMode: session.permissionMode,
             // ponytail: Codex·Antigravity는 매 턴 앞에 붙으므로 긴 컨텍스트가 반복됩니다. 비용이 문제되면 첫 턴에만 붙입니다.
             systemPromptAppend: [
               _skillRegistry.buildRoutingInstructionForPrompt(prompt),
@@ -1358,6 +1364,7 @@ class SessionManager extends ChangeNotifier {
       groupId: source.groupId,
       parentSessionId: sessionId,
       instructions: source.instructions,
+      permissionMode: source.permissionMode,
     );
     if (source.lastPrompt.isNotEmpty) {
       await sendPrompt(

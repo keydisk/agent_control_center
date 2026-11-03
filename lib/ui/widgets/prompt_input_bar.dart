@@ -24,6 +24,8 @@ class PromptInputBar extends StatefulWidget {
     required this.onSubmit,
     this.selectedEffort = ReasoningEffort.auto,
     this.onEffortChanged,
+    this.selectedPermissionMode = PermissionMode.manual,
+    this.onPermissionModeChanged,
     this.selectedDevice = TargetDeviceType.macosDesktop,
     this.onDeviceChanged,
     this.isBusy = false,
@@ -38,6 +40,8 @@ class PromptInputBar extends StatefulWidget {
   final ValueChanged<String> onModelChanged;
   final ReasoningEffort selectedEffort;
   final ValueChanged<ReasoningEffort>? onEffortChanged;
+  final PermissionMode selectedPermissionMode;
+  final ValueChanged<PermissionMode>? onPermissionModeChanged;
   final ValueChanged<String> onWorkingDirectoryChanged;
 
   /// 그룹 세션처럼 폴더를 바꿀 수 없을 때 true입니다.
@@ -51,6 +55,83 @@ class PromptInputBar extends StatefulWidget {
 
   @override
   State<PromptInputBar> createState() => _PromptInputBarState();
+}
+
+/// 세션의 권한 처리 방식을 고르는 메뉴
+class _PermissionModeMenu extends StatelessWidget {
+  const _PermissionModeMenu({required this.selected, this.onSelected});
+
+  final PermissionMode selected;
+  final ValueChanged<PermissionMode>? onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    final isBypass = selected == PermissionMode.bypass;
+    return PopupMenuButton<PermissionMode>(
+      key: const ValueKey('permission_mode_button'),
+      tooltip: '권한 모드',
+      enabled: onSelected != null,
+      onSelected: onSelected,
+      itemBuilder: (context) => [
+        for (final mode in PermissionMode.values)
+          PopupMenuItem(
+            key: ValueKey('permission_mode_${mode.name}'),
+            value: mode,
+            child: SizedBox(
+              width: 280,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          mode.label,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w500,
+                            color: mac.label,
+                          ),
+                        ),
+                        Text(
+                          mode.description,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: mac.secondaryLabel,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (mode == selected)
+                    Icon(Icons.check, size: 15, color: mac.blue),
+                ],
+              ),
+            ),
+          ),
+      ],
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            isBypass ? Icons.gpp_maybe_outlined : Icons.shield_outlined,
+            size: 13,
+            color: isBypass ? mac.red : mac.secondaryLabel,
+          ),
+          const SizedBox(width: 3),
+          Text(
+            selected.label,
+            style: TextStyle(
+              fontSize: 12,
+              color: isBypass ? mac.red : mac.secondaryLabel,
+            ),
+          ),
+          Icon(Icons.arrow_drop_down, size: 14, color: mac.secondaryLabel),
+        ],
+      ),
+    );
+  }
 }
 
 class _PromptInputBarState extends State<PromptInputBar> {
@@ -520,6 +601,10 @@ class _PromptInputBarState extends State<PromptInputBar> {
               }
             },
           ),
+        ),
+        _PermissionModeMenu(
+          selected: widget.selectedPermissionMode,
+          onSelected: widget.onPermissionModeChanged,
         ),
         TextButton.icon(
           key: const ValueKey('workdir_button'),

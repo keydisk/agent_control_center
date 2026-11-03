@@ -72,12 +72,17 @@ class ClaudeCodeAdapter implements AgentBackend {
         '--resume',
         config.conversationId!,
       ],
-      if (config.autoApproveBypassEnabled)
+      if (config.skipsPermissions)
         '--dangerously-skip-permissions'
       else ...[
-        // 안전한 작업은 Claude의 자동 판단에 맡기고, 판단이 필요한 것만 승인창으로 받습니다.
         '--permission-mode',
-        'auto',
+        switch (config.permissionMode) {
+          PermissionMode.acceptEdits => 'acceptEdits',
+          PermissionMode.plan => 'plan',
+          // 앱의 자동 모드는 파괴적 작업을 묻기 위해 모든 요청을 앱에서 판별합니다.
+          // Claude의 auto는 묻지 않고 지울 수 있어 쓰지 않습니다.
+          _ => 'manual',
+        },
       ],
       ...config.extraArgs,
     ];
@@ -215,6 +220,7 @@ class ClaudeCodeAdapter implements AgentBackend {
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
         trustedDirectories: config.trustedDirectories,
+        permissionMode: config.permissionMode,
       ),
     );
   }

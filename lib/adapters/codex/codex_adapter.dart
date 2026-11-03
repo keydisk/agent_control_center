@@ -138,11 +138,15 @@ class CodexAdapter implements AgentBackend {
         '-c',
         'model_reasoning_effort="${cfg.effort.name}"',
       ],
-      if (cfg.autoApproveBypassEnabled)
+      if (cfg.skipsPermissions)
         '--dangerously-bypass-approvals-and-sandbox'
       else
-        // workspace-write 샌드박스를 쓰고, 벗어나는 요청은 Codex의 자동 검토에 맡깁니다.
-        '--approve-for-me',
+        // codex exec는 실행 중에 물을 수 없어 확인이 필요한 모드는 읽기 전용으로 실행합니다.
+        ...switch (cfg.permissionMode) {
+          PermissionMode.auto => ['--approve-for-me'],
+          PermissionMode.acceptEdits => ['-s', 'workspace-write'],
+          _ => ['-s', 'read-only'],
+        },
       for (final dir in cfg.trustedDirectories)
         if (dir != cfg.workingDirectory) ...['--add-dir', dir],
       for (final img in attachments) ...['-i', img],
@@ -237,6 +241,7 @@ class CodexAdapter implements AgentBackend {
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
         trustedDirectories: config.trustedDirectories,
+        permissionMode: config.permissionMode,
       ),
     );
   }

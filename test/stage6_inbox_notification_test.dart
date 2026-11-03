@@ -9,6 +9,7 @@ import 'package:agent_control_center/services/notification_service.dart';
 import 'package:agent_control_center/services/permission_center.dart';
 import 'package:agent_control_center/ui/screens/inbox_screen.dart';
 import 'package:flutter/material.dart';
+import 'package:agent_control_center/services/session_manager.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -353,9 +354,12 @@ void main() {
         ),
       );
 
+      final sessionManager = SessionManager();
+      addTearDown(sessionManager.dispose);
       await tester.pumpWidget(
         MaterialApp(
           home: ControlCenterHomeScreen(
+            sessionManagerOverride: sessionManager,
             inboxServiceOverride: inboxService,
             notificationServiceOverride: notificationService,
           ),

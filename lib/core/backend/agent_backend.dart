@@ -17,6 +17,7 @@ class AgentSessionConfig {
     this.systemPromptAppend = '',
     this.autoApproveBypassEnabled = false,
     this.trustedDirectories = const [],
+    this.permissionMode = PermissionMode.manual,
   });
 
   final String sessionId;
@@ -32,6 +33,10 @@ class AgentSessionConfig {
 
   /// 승인 없이 읽고 쓸 수 있는 폴더 (신뢰 폴더와 그 세션의 worktree)
   final List<String> trustedDirectories;
+  final PermissionMode permissionMode;
+
+  bool get skipsPermissions =>
+      autoApproveBypassEnabled || permissionMode == PermissionMode.bypass;
 
   String get effectiveModel =>
       model.isNotEmpty ? model : backendType.defaultModel;
