@@ -3,6 +3,7 @@ import 'dart:math' show max;
 import 'package:flutter/material.dart';
 
 import '../../core/models/agent_models.dart';
+import '../../services/provider_usage_service.dart';
 import '../theme/mac_theme.dart';
 
 /// 오른쪽 사이드바. 토큰 사용량 그래프와 KV(프롬프트) 캐시 적중률을 표시합니다.
@@ -11,10 +12,21 @@ class KvCachePanel extends StatelessWidget {
     super.key,
     required this.session,
     required this.usageByBackend,
+    this.providerUsages = const [],
   });
 
   final TokenUsage session;
   final Map<BackendType, TokenUsage> usageByBackend;
+  final List<ProviderUsage> providerUsages;
+
+  static String _window(UsageWindow? window) {
+    if (window == null) return '정보 없음';
+    final remaining = window.resetsAt?.difference(DateTime.now());
+    final reset = remaining == null || remaining.isNegative
+        ? ''
+        : ' · ${remaining.inHours}시간 ${remaining.inMinutes.remainder(60)}분 후';
+    return '${window.usedPercent.toStringAsFixed(0)}%$reset';
+  }
 
   static String _percent(TokenUsage usage) =>
       '${(usage.cacheHitRate * 100).toStringAsFixed(1)}%';
@@ -156,6 +168,39 @@ class KvCachePanel extends StatelessWidget {
               color: mac.tertiaryLabel,
             ),
           ),
+          const SizedBox(height: 12),
+          const Divider(),
+          const Text(
+            '공급자 한도',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          for (final backend in BackendType.values) ...[
+            Text(backend.displayName, style: labelStyle),
+            const SizedBox(height: 4),
+            for (final usage in providerUsages.where(
+              (u) => u.backend == backend,
+            )) ...[
+              if (usage.name != backend.displayName)
+                Text(
+                  usage.name,
+                  style: labelStyle,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              row('5시간', _window(usage.fiveHour)),
+              row('일주일', _window(usage.weekly)),
+              row(
+                '최근 컨텍스트',
+                usage.contextUsed == null || usage.contextLimit == null
+                    ? '정보 없음'
+                    : '${usage.contextUsed}/${usage.contextLimit} tok',
+              ),
+              const SizedBox(height: 6),
+            ],
+            if (!providerUsages.any((u) => u.backend == backend))
+              Text('사용량 정보 없음', style: labelStyle),
+            const SizedBox(height: 8),
+          ],
         ],
       ),
     );

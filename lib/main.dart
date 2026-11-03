@@ -15,6 +15,7 @@ import 'services/effort_preference_store.dart';
 import 'services/inbox_service.dart';
 import 'services/notification_service.dart';
 import 'services/permission_center.dart';
+import 'services/provider_usage_service.dart';
 import 'services/session_manager.dart';
 import 'services/trusted_folder_store.dart';
 import 'services/workspace_group_store.dart';
@@ -88,6 +89,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   TargetDeviceType _selectedDevice = TargetDeviceType.macosDesktop;
   final Map<BackendType, BackendInstallationStatus> _installStatuses = {};
   final ScrollController _timelineScroll = ScrollController();
+  final ProviderUsageService _providerUsageService =
+      const ProviderUsageService();
+  List<ProviderUsage> _providerUsages = const [];
+  Timer? _providerUsageTimer;
   bool _followTimeline = true;
   String? _timelineSessionId;
 
@@ -218,6 +223,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     _sessionManager.addListener(_onManagerChanged);
     _sessionManager.skillRegistry.addListener(_onManagerChanged);
     _inboxService.addListener(_onManagerChanged);
+    if (usesRealEnvironment) {
+      _refreshProviderUsage();
+      _providerUsageTimer = Timer.periodic(
+        const Duration(minutes: 1),
+        (_) => _refreshProviderUsage(),
+      );
+    }
+  }
+
+  Future<void> _refreshProviderUsage() async {
+    final usages = await _providerUsageService.load();
+    if (mounted) setState(() => _providerUsages = usages);
   }
 
   void _handleDeepLink(NotificationDeepLink link) {
@@ -542,6 +559,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
   @override
   void dispose() {
+    _providerUsageTimer?.cancel();
     _timelineScroll.dispose();
     _deepLinkSub?.cancel();
     _inboxService.removeListener(_onManagerChanged);
@@ -779,6 +797,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                         KvCachePanel(
                           session: active?.usage ?? const TokenUsage(),
                           usageByBackend: _sessionManager.usageByBackend,
+                          providerUsages: _providerUsages,
                         ),
                       ],
                     ],
