@@ -253,12 +253,12 @@ void main() {
         workingDirectory: '/tmp',
       );
       final ok = _FakeBackend(compressionReply: '요약');
-      expect(await runHandoffCompression(ok, config, '압축'), '요약');
+      expect(await runHelperPrompt(ok, config, '압축'), '요약');
       expect(ok.disposed, isTrue);
 
       final silent = _FakeBackend();
       expect(
-        await runHandoffCompression(
+        await runHelperPrompt(
           silent,
           config,
           '압축',
@@ -400,7 +400,7 @@ void main() {
       final manager = SessionManager(
         registry: _registry(created, reply: '압축된 인계 문서'),
         skillRegistry: skills,
-        useAgentCompression: true,
+        useHelperAgent: true,
       );
       addTearDown(manager.dispose);
       final parent = manager.createSession(

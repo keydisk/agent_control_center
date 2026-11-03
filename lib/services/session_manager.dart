@@ -76,6 +76,7 @@ class ManagedSession {
     this.groupId,
     this.parentSessionId,
     this.instructions = '',
+    this.autoTitle = false,
     this.status = SessionStatus.idle,
     this.isStarted = false,
     this.hasDirectoryConflict = false,
@@ -99,6 +100,9 @@ class ManagedSession {
   final DateTime createdAt;
   String? groupId;
   String? parentSessionId;
+
+  /// 사용자가 이름을 정하지 않아 첫 대화로 이름을 지어야 하면 true입니다.
+  bool autoTitle;
 
   /// 그룹 지침에 더해지는 세션별 지침
   String instructions;
@@ -159,7 +163,7 @@ class SessionManager extends ChangeNotifier {
     this.trustedFolders,
     this.effortPreferences,
     this.groups,
-    this.useAgentCompression = false,
+    this.useHelperAgent = false,
     this.onChildWorktreeFinished,
     this.autoIsolateWithWorktree = false,
     this.onFolderTrustRequired,
@@ -193,8 +197,8 @@ class SessionManager extends ChangeNotifier {
   /// null이면 작업 그룹을 쓰지 않습니다.
   final WorkspaceGroupStore? groups;
 
-  /// 긴 기록을 세션의 백엔드로 압축합니다. 끄면 잘라낸 기록을 그대로 넘깁니다.
-  final bool useAgentCompression;
+  /// 기록 압축과 이름 짓기에 일회용 백엔드를 씁니다. 끄면 잘라낸 기록과 프롬프트 첫 줄을 씁니다.
+  final bool useHelperAgent;
   final void Function(
     ManagedSession parent,
     ManagedSession child,
@@ -213,6 +217,7 @@ class SessionManager extends ChangeNotifier {
 
   final Map<String, ManagedSession> _sessions = {};
   final Set<String> _mergingSessionIds = {};
+  final Set<String> _namingSessionIds = {};
   String? _activeSessionId;
   int _counter = 0;
 
@@ -308,6 +313,7 @@ class SessionManager extends ChangeNotifier {
       groupId: groupId,
       parentSessionId: parentSessionId,
       instructions: instructions,
+      autoTitle: title == null,
       hasDirectoryConflict: conflicts.isNotEmpty,
       events: initialEvents != null ? List.of(initialEvents) : null,
       rawLogs: initialRawLogs != null ? List.of(initialRawLogs) : null,
@@ -392,24 +398,57 @@ class SessionManager extends ChangeNotifier {
     String transcript,
   ) async {
     final skill = _skillRegistry.getSkill(handoffSkillName);
+    if (skill == null || !skill.isEnabled) return null;
+    return _runHelperAgent(
+      session,
+      buildHandoffPrompt(transcript, skillPath: skill.skillMdPath),
+    );
+  }
+
+  Future<String?> _runHelperAgent(ManagedSession session, String prompt) async {
     final store = trustedFolders;
     final dir = session.workingDirectory;
-    if (!useAgentCompression ||
-        skill == null ||
-        !skill.isEnabled ||
-        (store != null && !store.isTrusted(dir))) {
+    if (!useHelperAgent || (store != null && !store.isTrusted(dir))) {
       return null;
     }
-    return runHandoffCompression(
+    return runHelperPrompt(
       _registry.create(session.backendType),
       AgentSessionConfig(
-        sessionId: 'handoff_${session.sessionId}',
+        sessionId: 'helper_${session.sessionId}',
         backendType: session.backendType,
         workingDirectory: dir,
         model: session.model,
       ),
-      buildHandoffPrompt(transcript, skillPath: skill.skillMdPath),
+      prompt,
     );
+  }
+
+  /// 첫 턴이 끝나면 대화를 보고 이름을 짓습니다. 실패하면 프롬프트 첫 줄 이름을 유지합니다.
+  Future<void> _nameFromFirstTurn(ManagedSession session) async {
+    if (!session.autoTitle || !_namingSessionIds.add(session.sessionId)) return;
+    final transcript = buildSessionTranscript(
+      session.events,
+      lastTurnOnly: true,
+      maxChars: 2000,
+    );
+    final reply = transcript.isEmpty
+        ? null
+        : await _runHelperAgent(session, buildSessionTitlePrompt(transcript));
+    _namingSessionIds.remove(session.sessionId);
+    // 기다리는 동안 사용자가 이름을 정했거나 세션을 지웠으면 건드리지 않습니다.
+    if (!session.autoTitle || _sessions[session.sessionId] != session) return;
+    session.autoTitle = false;
+    final title = reply == null ? null : cleanSessionTitle(reply);
+    if (title == null) return;
+    session.title = title;
+    // worktree를 하위 세션에 맡긴 상위 세션은 직접 턴을 돌리지 않아 같은 이름을 받습니다.
+    final parent = _sessions[session.parentSessionId];
+    if (parent != null && parent.autoTitle) {
+      parent.autoTitle = false;
+      parent.title = title;
+    }
+    _recordSnapshot(session);
+    notifyListeners();
   }
 
   /// 그룹에 남은 스냅샷의 마지막 작업을 이어받습니다.
@@ -616,6 +655,7 @@ class SessionManager extends ChangeNotifier {
         session.status = SessionStatus.completed;
         _refreshAllConflictFlags();
         unawaited(_finishTurn(session));
+        unawaited(_nameFromFirstTurn(session));
         onSessionFinished?.call(session, true);
       } else if (event is ErrorEvent) {
         session.status = SessionStatus.failed;
@@ -889,7 +929,9 @@ class SessionManager extends ChangeNotifier {
                     'HEAD',
                   ]) !=
                   null);
-      if (session.title.startsWith('작업 #') && prompt.trim().isNotEmpty) {
+      if (session.autoTitle &&
+          session.title.startsWith('작업 #') &&
+          prompt.trim().isNotEmpty) {
         final shortTitle = prompt.trim().split('\n').first;
         session.title = shortTitle.length > 28
             ? '${shortTitle.substring(0, 28)}...'
@@ -1222,6 +1264,7 @@ class SessionManager extends ChangeNotifier {
     final session = _sessions[sessionId];
     if (session == null || session.title == title) return;
     session.title = title;
+    session.autoTitle = false;
     notifyListeners();
   }
 
