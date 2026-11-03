@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'ui/theme/mac_theme.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path/path.dart' as p;
 
 import 'core/backend/agent_backend.dart';
 import 'core/models/agent_models.dart';
@@ -723,6 +724,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 ],
               ),
             ),
+            if (active != null && _sessionManager.trustedFolders != null) ...[
+              const SizedBox(width: 8),
+              Flexible(
+                child: _TrustedFolderIndicator(
+                  workingDirectory: active.workingDirectory,
+                  coveringFolders: _sessionManager.trustedFolders!
+                      .coveringFolders(active.workingDirectory),
+                  onTap: () => _openSessionSettings(active.sessionId),
+                ),
+              ),
+              const SizedBox(width: 8),
+            ],
             IconButton(
               key: const ValueKey('open_inbox_screen_button'),
               tooltip: 'Inbox 요약 ($inboxCount)',
@@ -976,6 +989,71 @@ class _EmptyTimeline extends StatelessWidget {
             style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 현재 세션 폴더에 신뢰를 주는 폴더와 신뢰 상태를 도구 막대에 표시합니다.
+class _TrustedFolderIndicator extends StatelessWidget {
+  const _TrustedFolderIndicator({
+    required this.workingDirectory,
+    required this.coveringFolders,
+    required this.onTap,
+  });
+
+  final String workingDirectory;
+  final List<String> coveringFolders;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    final isTrusted = coveringFolders.isNotEmpty;
+    // 여러 폴더가 해당하면 작업 폴더에 가장 가까운 등록을 보여 줍니다.
+    final trustedFolder = isTrusted
+        ? coveringFolders.reduce((a, b) => a.length >= b.length ? a : b)
+        : null;
+    final color = isTrusted ? mac.green : mac.orange;
+    return Tooltip(
+      message: isTrusted
+          ? '신뢰 폴더: $trustedFolder\n작업 폴더: $workingDirectory\n클릭하면 세션 환경 설정을 엽니다.'
+          : '신뢰하지 않은 폴더: $workingDirectory\n클릭하면 세션 환경 설정을 엽니다.',
+      child: InkWell(
+        key: const ValueKey('trusted_folder_indicator'),
+        borderRadius: BorderRadius.circular(6),
+        onTap: onTap,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 240),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: mac.fill,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isTrusted
+                    ? Icons.verified_user_outlined
+                    : Icons.gpp_maybe_outlined,
+                size: 14,
+                color: color,
+              ),
+              const SizedBox(width: 5),
+              Flexible(
+                child: Text(
+                  isTrusted
+                      ? p.basename(trustedFolder!)
+                      : '신뢰 안 됨 · ${p.basename(workingDirectory)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 12, color: mac.label),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
