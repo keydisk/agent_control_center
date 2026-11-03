@@ -344,7 +344,7 @@ class ToolCallCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: statusColor.withValues(alpha: 0.35)),
+        side: BorderSide(color: context.mac.separator, width: 0.5),
       ),
       child: ExpansionTile(
         leading: Icon(
@@ -443,7 +443,7 @@ class FileDiffViewerCard extends StatelessWidget {
       margin: const EdgeInsets.symmetric(vertical: 4),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(8),
-        side: BorderSide(color: context.mac.tertiaryLabel.withValues(alpha: 0.4)),
+        side: BorderSide(color: context.mac.separator, width: 0.5),
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
