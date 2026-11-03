@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Agent Control Center (디바이스 선택 실행)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart"
+    },
+    {
+      "name": "Agent Control Center (macOS Desktop)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "macos",
+      "program": "lib/main.dart"
+    },
+    {
+      "name": "Agent Control Center (Chrome Web)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "chrome",
+      "program": "lib/main.dart"
+    },
+    {
+      "name": "Agent Control Center (iOS Device / Simulator)",
+      "request": "launch",
+      "type": "dart",
+      "deviceId": "ios",
+      "program": "lib/main.dart"
+    }
+  ]
+}

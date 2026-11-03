@@ -1,0 +1,360 @@
+import 'dart:io';
+import 'package:flutter/material.dart';
+
+import '../../core/models/agent_models.dart';
+
+/// 멀티라인 프롬프트 입력창 + 파일/이미지 첨부 + 백엔드별 슬래시 명령 자동완성 + 백엔드/모델/폴더 선택 바
+class PromptInputBar extends StatefulWidget {
+  const PromptInputBar({
+    super.key,
+    required this.selectedBackend,
+    required this.selectedModel,
+    required this.workingDirectory,
+    required this.onBackendChanged,
+    required this.onModelChanged,
+    required this.onWorkingDirectoryChanged,
+    required this.onSubmit,
+    this.selectedDevice = TargetDeviceType.macosDesktop,
+    this.onDeviceChanged,
+    this.isBusy = false,
+    this.onInterrupt,
+  });
+
+  final BackendType selectedBackend;
+  final String selectedModel;
+  final String workingDirectory;
+  final ValueChanged<BackendType> onBackendChanged;
+  final ValueChanged<String> onModelChanged;
+  final ValueChanged<String> onWorkingDirectoryChanged;
+  final void Function(String prompt, List<String> attachments) onSubmit;
+  final TargetDeviceType selectedDevice;
+  final ValueChanged<TargetDeviceType>? onDeviceChanged;
+  final bool isBusy;
+  final VoidCallback? onInterrupt;
+
+  @override
+  State<PromptInputBar> createState() => _PromptInputBarState();
+}
+
+class _PromptInputBarState extends State<PromptInputBar> {
+  final TextEditingController _controller = TextEditingController();
+  final List<String> _attachments = [];
+  List<String> _filteredSlashCommands = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onTextChanged);
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onTextChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _onTextChanged() {
+    final text = _controller.text;
+    if (text.startsWith('/') && !text.contains(' ') && !text.contains('\n')) {
+      final matches = widget.selectedBackend.slashCommands
+          .where((cmd) => cmd.toLowerCase().startsWith(text.toLowerCase()))
+          .toList();
+      setState(() {
+        _filteredSlashCommands = matches;
+      });
+    } else if (_filteredSlashCommands.isNotEmpty) {
+      setState(() {
+        _filteredSlashCommands = const [];
+      });
+    }
+  }
+
+  void _handleSend() {
+    final text = _controller.text.trim();
+    if (text.isEmpty) return;
+    final attached = List<String>.from(_attachments);
+    _controller.clear();
+    setState(() {
+      _attachments.clear();
+      _filteredSlashCommands = const [];
+    });
+    widget.onSubmit(text, attached);
+  }
+
+  Future<void> _showAddAttachmentDialog() async {
+    final pathCtrl = TextEditingController();
+    final added = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('파일 / 이미지 첨부'),
+        content: TextField(
+          controller: pathCtrl,
+          decoration: const InputDecoration(
+            labelText: '파일 절대 경로 입력',
+            hintText: '/path/to/image.png 또는 /path/to/file.dart',
+          ),
+        ),
+        actions: [
+          if (Platform.isMacOS)
+            TextButton(
+              onPressed: () async {
+                final res = await Process.run('osascript', [
+                  '-e',
+                  'POSIX path of (choose file with prompt "첨부할 파일을 선택하세요")',
+                ]);
+                if (res.exitCode == 0) {
+                  pathCtrl.text = res.stdout.toString().trim();
+                }
+              },
+              child: const Text('Finder에서 선택'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(pathCtrl.text.trim()),
+            child: const Text('첨부'),
+          ),
+        ],
+      ),
+    );
+    if (added != null && added.isNotEmpty) {
+      setState(() {
+        _attachments.add(added);
+      });
+    }
+  }
+
+  Future<void> _showWorkingDirDialog() async {
+    final dirCtrl = TextEditingController(text: widget.workingDirectory);
+    final updated = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('작업 디렉터리 변경'),
+        content: TextField(
+          controller: dirCtrl,
+          decoration: const InputDecoration(
+            labelText: '작업 디렉터리 경로',
+          ),
+        ),
+        actions: [
+          if (Platform.isMacOS)
+            TextButton(
+              onPressed: () async {
+                final res = await Process.run('osascript', [
+                  '-e',
+                  'POSIX path of (choose folder with prompt "작업 폴더를 선택하세요")',
+                ]);
+                if (res.exitCode == 0) {
+                  dirCtrl.text = res.stdout.toString().trim();
+                }
+              },
+              child: const Text('Finder에서 선택'),
+            ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(dirCtrl.text.trim()),
+            child: const Text('적용'),
+          ),
+        ],
+      ),
+    );
+    if (updated != null && updated.isNotEmpty) {
+      widget.onWorkingDirectoryChanged(updated);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final models = widget.selectedBackend.availableModels;
+    final activeModel = models.contains(widget.selectedModel)
+        ? widget.selectedModel
+        : widget.selectedBackend.defaultModel;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        border: Border(
+          top: BorderSide(color: Theme.of(context).dividerColor),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 슬래시 명령 자동완성 팝업 바
+          if (_filteredSlashCommands.isNotEmpty)
+            Container(
+              margin: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final cmd in _filteredSlashCommands)
+                    ActionChip(
+                      key: ValueKey('slash_chip_$cmd'),
+                      label: Text(cmd, style: const TextStyle(fontSize: 12)),
+                      onPressed: () {
+                        _controller.text = '$cmd ';
+                        _controller.selection = TextSelection.fromPosition(
+                          TextPosition(offset: _controller.text.length),
+                        );
+                      },
+                    ),
+                ],
+              ),
+            ),
+
+          // 첨부 파일 목록
+          if (_attachments.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  for (final file in _attachments)
+                    InputChip(
+                      avatar: const Icon(Icons.attach_file, size: 14),
+                      label: Text(
+                        file.split('/').last,
+                        style: const TextStyle(fontSize: 11.5),
+                      ),
+                      onDeleted: () {
+                        setState(() {
+                          _attachments.remove(file);
+                        });
+                      },
+                    ),
+                ],
+              ),
+            ),
+
+          // 상단 제어 바: 백엔드 선택, 모델 선택, 작업 폴더 선택
+          Wrap(
+            spacing: 10,
+            runSpacing: 6,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            children: [
+              DropdownButtonHideUnderline(
+                child: DropdownButton<BackendType>(
+                  key: const ValueKey('backend_dropdown'),
+                  value: widget.selectedBackend,
+                  isDense: true,
+                  items: [
+                    for (final b in BackendType.values)
+                      DropdownMenuItem(
+                        value: b,
+                        child: Text(
+                          b.displayName,
+                          style: const TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      widget.onBackendChanged(val);
+                    }
+                  },
+                ),
+              ),
+              DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  key: const ValueKey('model_dropdown'),
+                  value: activeModel,
+                  isDense: true,
+                  items: [
+                    for (final m in models)
+                      DropdownMenuItem(
+                        value: m,
+                        child: Text(m, style: const TextStyle(fontSize: 12)),
+                      ),
+                  ],
+                  onChanged: (val) {
+                    if (val != null) {
+                      widget.onModelChanged(val);
+                    }
+                  },
+                ),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('workdir_button'),
+                onPressed: _showWorkingDirDialog,
+                icon: const Icon(Icons.folder_open, size: 15),
+                label: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 220),
+                  child: Text(
+                    widget.workingDirectory,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 11.5),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+
+          // 멀티라인 프롬프트 입력창 및 액션 버튼
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              IconButton(
+                key: const ValueKey('attach_button'),
+                tooltip: '파일/이미지 첨부',
+                onPressed: _showAddAttachmentDialog,
+                icon: const Icon(Icons.attach_file),
+              ),
+              Expanded(
+                child: TextField(
+                  key: const ValueKey('prompt_textfield'),
+                  controller: _controller,
+                  minLines: 1,
+                  maxLines: 5,
+                  decoration: InputDecoration(
+                    hintText:
+                        '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령 자동완성)',
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              if (widget.isBusy && widget.onInterrupt != null)
+                FilledButton.tonalIcon(
+                  key: const ValueKey('interrupt_button'),
+                  onPressed: widget.onInterrupt,
+                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                  label: const Text('중지'),
+                )
+              else
+                FilledButton.icon(
+                  key: const ValueKey('send_button'),
+                  onPressed: _handleSend,
+                  icon: const Icon(Icons.send_rounded, size: 16),
+                  label: const Text('전송'),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
