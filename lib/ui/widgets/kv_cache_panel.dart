@@ -28,6 +28,13 @@ class KvCachePanel extends StatelessWidget {
     return '${window.usedPercent.toStringAsFixed(0)}%$reset';
   }
 
+  static String _contextLabel(ProviderUsage usage) {
+    final used = usage.contextUsed;
+    final limit = usage.contextLimit;
+    if (used == null || limit == null || limit <= 0) return '정보 없음';
+    return '$used/$limit tok';
+  }
+
   static String _percent(TokenUsage usage) =>
       '${(usage.cacheHitRate * 100).toStringAsFixed(1)}%';
 
@@ -57,11 +64,50 @@ class KvCachePanel extends StatelessWidget {
           Expanded(
             child: Text(
               label,
+              maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: labelStyle,
             ),
           ),
-          Text(value, key: valueKey, style: valueStyle),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              value,
+              key: valueKey,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: valueStyle,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    Widget barRow(
+      String label,
+      String value, {
+      required double fraction,
+      Key? barKey,
+      Key? valueKey,
+      String? semanticsLabel,
+      double minHeight = 5,
+    }) => Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          row(label, value, valueKey: valueKey),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(2),
+            child: LinearProgressIndicator(
+              key: barKey,
+              value: fraction.clamp(0.0, 1.0),
+              minHeight: minHeight,
+              color: mac.blue,
+              backgroundColor: mac.fill,
+              semanticsLabel: semanticsLabel ?? '$label $value',
+            ),
+          ),
         ],
       ),
     );
@@ -156,9 +202,17 @@ class KvCachePanel extends StatelessWidget {
           Text('백엔드별 적중률', style: labelStyle),
           const SizedBox(height: 4),
           for (final backend in BackendType.values)
-            row(
-              backend.displayName,
-              _percent(usageByBackend[backend] ?? const TokenUsage()),
+            Builder(
+              builder: (context) {
+                final usage = usageByBackend[backend] ?? const TokenUsage();
+                return barRow(
+                  backend.displayName,
+                  _percent(usage),
+                  fraction: usage.cacheHitRate,
+                  barKey: ValueKey('kv_cache_bar_${backend.id}'),
+                  minHeight: 4,
+                );
+              },
             ),
           const SizedBox(height: 8),
           Text(
@@ -187,18 +241,39 @@ class KvCachePanel extends StatelessWidget {
                   style: labelStyle,
                   overflow: TextOverflow.ellipsis,
                 ),
-              row('5시간', _window(usage.fiveHour)),
-              row('일주일', _window(usage.weekly)),
-              row(
+              barRow(
+                '5시간',
+                _window(usage.fiveHour),
+                fraction: (usage.fiveHour?.usedPercent ?? 0) / 100,
+                barKey: ValueKey(
+                  'provider_five_hour_bar_${backend.id}_${usage.name}',
+                ),
+              ),
+              barRow(
+                '일주일',
+                _window(usage.weekly),
+                fraction: (usage.weekly?.usedPercent ?? 0) / 100,
+                barKey: ValueKey(
+                  'provider_weekly_bar_${backend.id}_${usage.name}',
+                ),
+              ),
+              barRow(
                 '최근 컨텍스트',
-                usage.contextUsed == null || usage.contextLimit == null
-                    ? '정보 없음'
-                    : '${usage.contextUsed}/${usage.contextLimit} tok',
+                _contextLabel(usage),
+                fraction: usage.contextFraction,
+                barKey: ValueKey(
+                  'provider_context_bar_${backend.id}_${usage.name}',
+                ),
               ),
               const SizedBox(height: 6),
             ],
             if (!providerUsages.any((u) => u.backend == backend))
-              Text('사용량 정보 없음', style: labelStyle),
+              barRow(
+                '사용량 정보 없음',
+                '0%',
+                fraction: 0,
+                barKey: ValueKey('provider_empty_bar_${backend.id}'),
+              ),
             const SizedBox(height: 8),
           ],
         ],

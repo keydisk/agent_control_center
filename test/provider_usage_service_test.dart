@@ -35,4 +35,19 @@ void main() {
     expect(parseCodexWindow({}), isNull);
     expect(parseAntigravityUsage('{}'), isEmpty);
   });
+
+  test('Antigravity 버킷 라벨에 session/hour가 없어도 기본 한도로 읽는다', () {
+    final agy = parseAntigravityUsage('''{
+      "command": {"data": {"groups": [{
+        "displayName": "Gemini 4 Argon",
+        "buckets": [
+          {"bucketId": "gemini-4-argon", "remainingFraction": 0.65, "resetTime": "2099-01-01T00:00:00Z"}
+        ]
+      }]}}
+    }''');
+
+    expect(agy.single.name, 'Gemini 4 Argon');
+    expect(agy.single.fiveHour?.usedPercent, closeTo(35, 0.01));
+    expect(agy.single.weekly, isNull);
+  });
 }
