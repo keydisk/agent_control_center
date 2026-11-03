@@ -571,27 +571,45 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
     return Scaffold(
       backgroundColor: context.mac.sidebar,
-      // 포커스가 입력창 밖에 있어도 Esc가 현재 세션의 실행을 중지합니다.
-      body: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): () {
-            if (isBusy) _sessionManager.stopSession(active!.sessionId);
-          },
+      // 포커스가 입력창 밖에 있어도 ⌘C/Ctrl+C가 현재 세션의 실행을 중지합니다.
+      // CallbackShortcuts는 항상 키를 소비하므로 복사를 넘겨주려면 직접 처리합니다.
+      body: Focus(
+        autofocus: true,
+        onKeyEvent: (node, event) {
+          if (!isBusy ||
+              !_stopShortcut.accepts(event, HardwareKeyboard.instance) ||
+              _hasFocusedTextSelection()) {
+            return KeyEventResult.ignored;
+          }
+          _sessionManager.stopSession(active!.sessionId);
+          return KeyEventResult.handled;
         },
-        child: Focus(
-          autofocus: true,
-          child: _buildBody(
-            active: active,
-            selectedBackend: selectedBackend,
-            selectedModel: selectedModel,
-            workingDir: workingDir,
-            events: events,
-            rawLogs: rawLogs,
-            isBusy: isBusy,
-          ),
+        child: _buildBody(
+          active: active,
+          selectedBackend: selectedBackend,
+          selectedModel: selectedModel,
+          workingDir: workingDir,
+          events: events,
+          rawLogs: rawLogs,
+          isBusy: isBusy,
         ),
       ),
     );
+  }
+
+  static final _stopShortcut = SingleActivator(
+    LogicalKeyboardKey.keyC,
+    meta: Platform.isMacOS,
+    control: !Platform.isMacOS,
+  );
+
+  /// 선택한 글자가 있으면 ⌘C/Ctrl+C는 중지가 아니라 복사입니다.
+  bool _hasFocusedTextSelection() {
+    final selection = FocusManager.instance.primaryFocus?.context
+        ?.findAncestorStateOfType<EditableTextState>()
+        ?.textEditingValue
+        .selection;
+    return selection != null && selection.isValid && !selection.isCollapsed;
   }
 
   Widget _buildBody({

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -157,7 +158,7 @@ class _AgentActivityBarState extends State<AgentActivityBar> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
       child: Text(
-        '${_frames[seconds % _frames.length]} ${widget.activity}… ($elapsed · Esc 중지)',
+        '${_frames[seconds % _frames.length]} ${widget.activity}… ($elapsed · ${Platform.isMacOS ? '⌘C' : 'Ctrl+C'} 중지)',
         key: const ValueKey('agent_activity_bar'),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
