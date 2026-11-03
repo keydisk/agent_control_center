@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:agent_control_center/adapters/claude/claude_code_adapter.dart';
 import 'package:agent_control_center/adapters/claude/claude_code_event_parser.dart';
@@ -6,6 +7,7 @@ import 'package:agent_control_center/core/backend/agent_backend.dart';
 import 'package:agent_control_center/core/models/agent_models.dart';
 import 'package:agent_control_center/main.dart';
 import 'package:agent_control_center/services/session_manager.dart';
+import 'package:agent_control_center/ui/widgets/prompt_input_bar.dart';
 import 'package:agent_control_center/ui/widgets/timeline_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -275,18 +277,63 @@ void main() {
       return (manager, backend);
     }
 
-    testWidgets('실행 중 상태 줄을 표시하고 Esc로 중지한다', (tester) async {
+    Future<void> pressStopShortcut(WidgetTester tester) async {
+      final modifier = Platform.isMacOS
+          ? LogicalKeyboardKey.metaLeft
+          : LogicalKeyboardKey.controlLeft;
+      await tester.sendKeyDownEvent(modifier);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyC);
+      await tester.sendKeyUpEvent(modifier);
+    }
+
+    testWidgets('글자를 선택한 상태의 중지 단축키는 복사로 넘긴다', (tester) async {
+      final (manager, backend) = await pumpHome(tester);
+      await manager.sendPrompt(manager.activeSessionId!, '요청');
+      await tester.pump();
+
+      final input = find.descendant(
+        of: find.byType(PromptInputBar),
+        matching: find.byType(TextField),
+      );
+      await tester.tap(input);
+      await tester.pump();
+      tester
+          .widget<TextField>(input)
+          .controller!
+          .value = const TextEditingValue(
+        text: '복사할 글자',
+        selection: TextSelection(baseOffset: 0, extentOffset: 3),
+      );
+      await tester.pump();
+      await pressStopShortcut(tester);
+      await tester.pump();
+      expect(backend.interrupted, isFalse);
+
+      tester.widget<TextField>(input).controller!.selection =
+          const TextSelection.collapsed(offset: 0);
+      await tester.pump();
+      await pressStopShortcut(tester);
+      await tester.pump();
+      expect(backend.interrupted, isTrue);
+    });
+
+    testWidgets('실행 중 상태 줄을 표시하고 중지 단축키로 중지한다', (tester) async {
       final (manager, backend) = await pumpHome(tester);
       final id = manager.activeSessionId!;
       expect(find.byKey(const ValueKey('agent_activity_bar')), findsNothing);
 
       await manager.sendPrompt(id, '요청');
       await tester.pump();
-      expect(find.textContaining('생각 중… (0s · Esc 중지)'), findsOneWidget);
+      final shortcut = Platform.isMacOS ? '⌘C' : 'Ctrl+C';
+      expect(find.textContaining('생각 중… (0s · $shortcut 중지)'), findsOneWidget);
       expect(find.byKey(const ValueKey('interrupt_button')), findsOneWidget);
 
       await tester.pump(const Duration(seconds: 1));
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(backend.interrupted, isFalse);
+
+      await pressStopShortcut(tester);
       await tester.pump();
 
       expect(backend.interrupted, isTrue);
