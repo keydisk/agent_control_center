@@ -630,6 +630,34 @@ class SkillInvokedEvent extends AgentEvent {
   String get eventKind => 'skill_invoked';
 }
 
+/// 하위 세션의 worktree 작업 상태를 상위 세션 타임라인에 알립니다.
+class ChildWorktreeEvent extends AgentEvent {
+  const ChildWorktreeEvent({
+    required super.id,
+    required super.sessionId,
+    required super.backend,
+    required super.timestamp,
+    required this.childSessionId,
+    required this.childTitle,
+    required this.message,
+    this.summary = '',
+    this.needsAttention = false,
+    this.canMerge = false,
+    super.model,
+    super.rawLog,
+  });
+
+  final String childSessionId;
+  final String childTitle;
+  final String message;
+  final String summary;
+  final bool needsAttention;
+  final bool canMerge;
+
+  @override
+  String get eventKind => 'child_worktree';
+}
+
 class ErrorEvent extends AgentEvent {
   const ErrorEvent({
     required super.id,

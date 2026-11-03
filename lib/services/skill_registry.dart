@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/models/agent_models.dart';
+import 'session_context.dart';
 
 class SkillDefinition {
   SkillDefinition({
@@ -172,6 +173,24 @@ class SkillRegistry extends ChangeNotifier {
       }
     }
     notifyListeners();
+  }
+
+  /// 세션 압축 스킬을 설치하고 3대 백엔드 스킬 폴더에 연결합니다. 기존 항목은 덮어쓰지 않습니다.
+  Future<void> installHandoffSkill(String rootDir) async {
+    final dir = await Directory(
+      p.join(rootDir, handoffSkillName),
+    ).create(recursive: true);
+    final skillMd = File(p.join(dir.path, 'SKILL.md'));
+    await skillMd.writeAsString(handoffSkillMarkdown);
+    registerSkill(parseSkillMdFile(skillMd)!);
+    for (final backendDir in _backendSkillDirs.values) {
+      await Directory(backendDir).create(recursive: true);
+      final target = p.join(backendDir, handoffSkillName);
+      if (FileSystemEntity.typeSync(target, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        await Link(target).create(dir.path);
+      }
+    }
   }
 
   /// 활성화된 스킬을 3대 백엔드(`agy`, `claude`, `codex`) 스킬 폴더에 심볼릭 링크로 동기화합니다.

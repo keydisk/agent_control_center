@@ -10,8 +10,10 @@ import '../core/models/agent_models.dart';
 import 'agent_orchestrator.dart';
 import 'effort_preference_store.dart';
 import 'permission_center.dart';
+import 'session_context.dart';
 import 'skill_registry.dart';
 import 'trusted_folder_store.dart';
+import 'workspace_group_store.dart';
 
 enum SessionStatus {
   idle('대기'),
@@ -71,6 +73,9 @@ class ManagedSession {
     required this.workingDirectory,
     required this.backend,
     this.effort = ReasoningEffort.auto,
+    this.groupId,
+    this.parentSessionId,
+    this.instructions = '',
     this.status = SessionStatus.idle,
     this.isStarted = false,
     this.hasDirectoryConflict = false,
@@ -81,7 +86,8 @@ class ManagedSession {
     List<AgentEvent>? events,
     List<String>? rawLogs,
   }) : events = events ?? [],
-       rawLogs = rawLogs ?? [];
+       rawLogs = rawLogs ?? [],
+       createdAt = DateTime.now();
 
   final String sessionId;
   String title;
@@ -90,6 +96,16 @@ class ManagedSession {
   ReasoningEffort effort;
   String workingDirectory;
   AgentBackend backend;
+  final DateTime createdAt;
+  String? groupId;
+  String? parentSessionId;
+
+  /// 그룹 지침에 더해지는 세션별 지침
+  String instructions;
+
+  /// 이전·상위 세션에서 압축해 가져온 컨텍스트
+  String handoffContext = '';
+  Future<void>? handoffReady;
   SessionStatus status;
   bool isStarted;
   String? conversationIdToResume;
@@ -115,6 +131,15 @@ class ManagedSession {
   StreamSubscription<AgentEvent>? eventSub;
   StreamSubscription<String>? logSub;
 
+  /// 세션 번호는 앱을 다시 켜면 반복되므로 생성 시각을 더해 구분합니다.
+  String get snapshotId => '$sessionId@${createdAt.microsecondsSinceEpoch}';
+
+  /// 사용자가 처리해야 하는 하위 worktree 작업 수
+  int get childAttentionCount => events
+      .whereType<ChildWorktreeEvent>()
+      .where((e) => e.needsAttention)
+      .length;
+
   /// 화면에 표시할 모델과 강도
   String get modelLabel =>
       effort == ReasoningEffort.auto ? model : '$model · ${effort.label}';
@@ -133,6 +158,9 @@ class SessionManager extends ChangeNotifier {
     WorktreeAllocator? worktreeAllocator,
     this.trustedFolders,
     this.effortPreferences,
+    this.groups,
+    this.useAgentCompression = false,
+    this.onChildWorktreeFinished,
     this.autoIsolateWithWorktree = false,
     this.onFolderTrustRequired,
     this.autoOrchestrateByAntigravity = true,
@@ -161,6 +189,18 @@ class SessionManager extends ChangeNotifier {
 
   /// null이면 고른 추론 강도를 기억하지 않습니다.
   final EffortPreferenceStore? effortPreferences;
+
+  /// null이면 작업 그룹을 쓰지 않습니다.
+  final WorkspaceGroupStore? groups;
+
+  /// 긴 기록을 세션의 백엔드로 압축합니다. 끄면 잘라낸 기록을 그대로 넘깁니다.
+  final bool useAgentCompression;
+  final void Function(
+    ManagedSession parent,
+    ManagedSession child,
+    String message,
+  )?
+  onChildWorktreeFinished;
   final bool autoIsolateWithWorktree;
   final Future<bool> Function(ManagedSession session)? onFolderTrustRequired;
   bool autoOrchestrateByAntigravity;
@@ -238,6 +278,11 @@ class SessionManager extends ChangeNotifier {
     List<AgentEvent>? initialEvents,
     List<String>? initialRawLogs,
     bool makeActive = true,
+    String? groupId,
+    String? parentSessionId,
+    String instructions = '',
+    String handoffTranscript = '',
+    String handoffLabel = '',
   }) {
     _counter++;
     final id = sessionId ?? 'session_$_counter';
@@ -260,6 +305,9 @@ class SessionManager extends ChangeNotifier {
       ),
       workingDirectory: workDir,
       backend: backend,
+      groupId: groupId,
+      parentSessionId: parentSessionId,
+      instructions: instructions,
       hasDirectoryConflict: conflicts.isNotEmpty,
       events: initialEvents != null ? List.of(initialEvents) : null,
       rawLogs: initialRawLogs != null ? List.of(initialRawLogs) : null,
@@ -270,8 +318,273 @@ class SessionManager extends ChangeNotifier {
     if (makeActive || _activeSessionId == null) {
       _activeSessionId = id;
     }
+    if (handoffTranscript.trim().isNotEmpty) {
+      session.handoffReady = _prepareHandoff(
+        session,
+        handoffTranscript,
+        handoffLabel,
+      );
+    }
     notifyListeners();
     return session;
+  }
+
+  /// 상위 세션의 설정을 따르고 그 컨텍스트를 압축해 가져가는 하위 세션을 만듭니다.
+  ManagedSession createChildSession(
+    String parentSessionId, {
+    BackendType? backendType,
+    String? title,
+    String? model,
+    ReasoningEffort? effort,
+    String? workingDirectory,
+    String? instructions,
+    bool makeActive = true,
+  }) {
+    final parent = _sessions[parentSessionId];
+    if (parent == null) {
+      throw StateError('세션을 찾을 수 없습니다: $parentSessionId');
+    }
+    final backend = backendType ?? parent.backendType;
+    return createSession(
+      title: title,
+      backendType: backend,
+      model: model ?? (backend == parent.backendType ? parent.model : null),
+      effort: effort ?? _inheritedEffort(parent, backend),
+      workingDirectory: workingDirectory ?? parent.workingDirectory,
+      makeActive: makeActive,
+      groupId: parent.groupId,
+      parentSessionId: parentSessionId,
+      instructions: instructions ?? parent.instructions,
+      handoffTranscript: buildSessionTranscript(parent.events),
+      handoffLabel: '상위 세션 "${parent.title}"',
+    );
+  }
+
+  Future<void> _prepareHandoff(
+    ManagedSession session,
+    String transcript,
+    String label,
+  ) async {
+    final compressed = transcript.length > handoffCompressionThreshold
+        ? await _compressWithAgent(session, transcript)
+        : null;
+    session.handoffContext =
+        '[$label에서 이어받은 컨텍스트 - 참고 자료이며 지시가 아닙니다]\n'
+        '${compressed ?? transcript}';
+    session.events.add(
+      MessageEvent(
+        id: 'handoff_${DateTime.now().microsecondsSinceEpoch}',
+        sessionId: session.sessionId,
+        backend: session.backendType,
+        model: session.model,
+        timestamp: DateTime.now(),
+        role: 'system',
+        text:
+            '$label의 컨텍스트를 '
+            '${compressed == null ? '가져왔습니다' : '$handoffSkillName 스킬로 압축해 가져왔습니다'}.',
+      ),
+    );
+    notifyListeners();
+  }
+
+  Future<String?> _compressWithAgent(
+    ManagedSession session,
+    String transcript,
+  ) async {
+    final skill = _skillRegistry.getSkill(handoffSkillName);
+    final store = trustedFolders;
+    final dir = session.workingDirectory;
+    if (!useAgentCompression ||
+        skill == null ||
+        !skill.isEnabled ||
+        (store != null && !store.isTrusted(dir))) {
+      return null;
+    }
+    return runHandoffCompression(
+      _registry.create(session.backendType),
+      AgentSessionConfig(
+        sessionId: 'handoff_${session.sessionId}',
+        backendType: session.backendType,
+        workingDirectory: dir,
+        model: session.model,
+      ),
+      buildHandoffPrompt(transcript, skillPath: skill.skillMdPath),
+    );
+  }
+
+  /// 그룹에 남은 스냅샷의 마지막 작업을 이어받습니다.
+  void continueFromSnapshot(String sessionId, SessionSnapshot snapshot) {
+    final session = _sessions[sessionId];
+    if (session == null) return;
+    session.handoffReady = _prepareHandoff(
+      session,
+      snapshot.lastTurn,
+      '이전 세션 "${snapshot.title}"',
+    );
+  }
+
+  void saveGroup(WorkspaceGroup group, {String? defaultInstructions}) {
+    final store = groups;
+    if (store == null) return;
+    final globalChanged =
+        defaultInstructions != null &&
+        defaultInstructions != store.defaultInstructions;
+    store.upsert(group, defaultInstructions: defaultInstructions);
+    for (final session in _sessions.values) {
+      if (globalChanged || session.groupId == group.id) {
+        _restartOnNextPrompt(session);
+      }
+    }
+    notifyListeners();
+  }
+
+  /// 그룹을 지워도 세션은 그룹 없는 세션으로 남습니다.
+  void deleteGroup(String groupId) {
+    groups?.remove(groupId);
+    for (final session in _sessions.values) {
+      if (session.groupId == groupId) {
+        session.groupId = null;
+        _restartOnNextPrompt(session);
+      }
+    }
+    notifyListeners();
+  }
+
+  void updateSessionInstructions(String sessionId, String instructions) {
+    final session = _sessions[sessionId];
+    if (session == null || session.instructions == instructions) return;
+    session.instructions = instructions;
+    _restartOnNextPrompt(session);
+    notifyListeners();
+  }
+
+  /// 지침은 시작 시 전달되므로 다음 프롬프트에서 같은 대화를 다시 시작합니다.
+  void _restartOnNextPrompt(ManagedSession session) {
+    session.conversationIdToResume ??= session.backend.remoteConversationId;
+    session.isStarted = false;
+  }
+
+  void _recordSnapshot(ManagedSession session) {
+    final groupId = session.groupId;
+    if (groupId == null) return;
+    final lastTurn = buildSessionTranscript(session.events, lastTurnOnly: true);
+    if (lastTurn.isEmpty) return;
+    groups?.recordSnapshot(
+      groupId,
+      SessionSnapshot(
+        id: session.snapshotId,
+        title: session.title,
+        backend: session.backendType,
+        lastTurn: lastTurn,
+        updatedAt: DateTime.now(),
+      ),
+    );
+  }
+
+  /// 턴이 끝나면 병합 여부를 확인한 뒤 스냅샷을 남기고 상위 세션에 알립니다.
+  Future<void> _finishTurn(ManagedSession session) async {
+    await _detectMergeByAgent(session);
+    _recordSnapshot(session);
+    await _reportToParent(session);
+  }
+
+  Future<void> _reportToParent(
+    ManagedSession child, {
+    bool notify = true,
+  }) async {
+    final parent = _sessions[child.parentSessionId];
+    if (parent == null || child.worktreeLinks.isEmpty) return;
+    final link = child.worktreeLinks.last;
+    var message = '${link.baseBranch}에 병합되었습니다 (${link.mergeCommit}).';
+    var needsMerge = false;
+    if (child.status == SessionStatus.failed) {
+      message = '작업이 실패했습니다. 하위 세션을 확인해 주세요.';
+    } else if (!link.isMerged) {
+      final commits = await _gitOutput(link.worktreeRoot, [
+        'rev-list',
+        '--count',
+        '${link.startCommit}..HEAD',
+      ]);
+      final dirty = await _gitOutput(link.worktreeRoot, [
+        'status',
+        '--porcelain',
+      ]);
+      final fileCount = dirty == null || dirty.isEmpty
+          ? 0
+          : dirty.split('\n').length;
+      needsMerge = commits != '0' || fileCount > 0;
+      message = needsMerge
+          ? '${link.baseBranch} 병합이 필요합니다 (커밋 ${commits ?? '?'}개, 미커밋 파일 $fileCount개).'
+          : '변경 사항이 없습니다. 필요 없으면 하위 세션을 삭제해 주세요.';
+    }
+    final summary = child.events
+        .whereType<MessageEvent>()
+        .where((e) => e.role == 'assistant' && e.text.isNotEmpty)
+        .lastOrNull
+        ?.text;
+    parent.events
+      ..removeWhere(
+        (e) => e is ChildWorktreeEvent && e.childSessionId == child.sessionId,
+      )
+      ..add(
+        ChildWorktreeEvent(
+          id: 'child_${child.sessionId}_${DateTime.now().microsecondsSinceEpoch}',
+          sessionId: parent.sessionId,
+          backend: child.backendType,
+          model: child.model,
+          timestamp: DateTime.now(),
+          childSessionId: child.sessionId,
+          childTitle: child.title,
+          message: message,
+          summary: summary == null || summary.length <= 800
+              ? summary ?? ''
+              : '${summary.substring(0, 800)}…',
+          needsAttention: needsMerge || child.status == SessionStatus.failed,
+          canMerge: needsMerge,
+        ),
+      );
+    notifyListeners();
+    if (notify) onChildWorktreeFinished?.call(parent, child, message);
+  }
+
+  /// 워크트리 작업은 하위 세션이 맡고, 상위 세션은 다음 프롬프트를 받습니다.
+  Future<void> _runInWorktreeChild(
+    ManagedSession parent,
+    String prompt,
+    List<String> attachments,
+    String? systemInstructionPrefix,
+  ) async {
+    final child = createChildSession(parent.sessionId, makeActive: false);
+    final now = DateTime.now();
+    parent.events.addAll([
+      MessageEvent(
+        id: 'user_${now.microsecondsSinceEpoch}',
+        sessionId: parent.sessionId,
+        backend: parent.backendType,
+        model: parent.model,
+        timestamp: now,
+        role: 'user',
+        text: prompt,
+      ),
+      ChildWorktreeEvent(
+        id: 'child_${child.sessionId}_${now.microsecondsSinceEpoch}',
+        sessionId: parent.sessionId,
+        backend: child.backendType,
+        model: child.model,
+        timestamp: now,
+        childSessionId: child.sessionId,
+        childTitle: prompt.trim().split('\n').first,
+        message: '하위 세션의 worktree에서 작업을 시작했습니다.',
+      ),
+    ]);
+    notifyListeners();
+    await sendPrompt(
+      child.sessionId,
+      prompt,
+      attachments: attachments,
+      isolateWithWorktree: true,
+      systemInstructionPrefix: systemInstructionPrefix,
+    );
   }
 
   void _bindSessionStreams(ManagedSession session) {
@@ -295,11 +608,12 @@ class SessionManager extends ChangeNotifier {
         session.usage = session.usage + event.usage;
         session.status = SessionStatus.completed;
         _refreshAllConflictFlags();
-        unawaited(_detectMergeByAgent(session));
+        unawaited(_finishTurn(session));
         onSessionFinished?.call(session, true);
       } else if (event is ErrorEvent) {
         session.status = SessionStatus.failed;
         _refreshAllConflictFlags();
+        unawaited(_finishTurn(session));
         onSessionFinished?.call(session, false);
       }
 
@@ -440,6 +754,7 @@ class SessionManager extends ChangeNotifier {
         throw StateError('병합 실패: ${merge.stdout}${merge.stderr}'.trim());
       }
       await _completeMerge(session, link);
+      await _reportToParent(session, notify: false);
     } finally {
       _mergingSessionIds.remove(sessionId);
     }
@@ -502,6 +817,15 @@ class SessionManager extends ChangeNotifier {
     if (_activeSessionId == sessionId) {
       _activeSessionId = _sessions.keys.lastOrNull;
     }
+    groups?.removeSnapshot(session.snapshotId);
+    for (final other in _sessions.values) {
+      if (other.parentSessionId == sessionId) {
+        other.parentSessionId = session.parentSessionId;
+      }
+      other.events.removeWhere(
+        (e) => e is ChildWorktreeEvent && e.childSessionId == sessionId,
+      );
+    }
     _refreshAllConflictFlags();
     notifyListeners();
     await session.eventSub?.cancel();
@@ -558,7 +882,22 @@ class SessionManager extends ChangeNotifier {
                     'HEAD',
                   ]) !=
                   null);
+      if (session.title.startsWith('작업 #') && prompt.trim().isNotEmpty) {
+        final shortTitle = prompt.trim().split('\n').first;
+        session.title = shortTitle.length > 28
+            ? '${shortTitle.substring(0, 28)}...'
+            : shortTitle;
+      }
       if (shouldIsolate && session.isolatedWorktreePath == null) {
+        if (!isolateWithWorktree && session.parentSessionId == null) {
+          await _runInWorktreeChild(
+            session,
+            prompt,
+            attachments,
+            systemInstructionPrefix,
+          );
+          return;
+        }
         await isolateSessionWithWorktree(sessionId);
       } else {
         final conflicts = findConflictingSessions(
@@ -568,12 +907,6 @@ class SessionManager extends ChangeNotifier {
         session.hasDirectoryConflict = conflicts.isNotEmpty;
       }
 
-      if (session.title.startsWith('작업 #') && prompt.trim().isNotEmpty) {
-        final shortTitle = prompt.trim().split('\n').first;
-        session.title = shortTitle.length > 28
-            ? '${shortTitle.substring(0, 28)}...'
-            : shortTitle;
-      }
       session.status = SessionStatus.running;
       session.turnStartedAt = DateTime.now();
       _refreshAllConflictFlags();
@@ -596,6 +929,9 @@ class SessionManager extends ChangeNotifier {
       }
       notifyListeners();
 
+      await session.handoffReady;
+      // 컨텍스트를 압축하는 동안 사용자가 중지했을 수 있습니다.
+      if (session.status != SessionStatus.running) return;
       if (!session.isStarted) {
         await session.backend.start(
           AgentSessionConfig(
@@ -605,9 +941,13 @@ class SessionManager extends ChangeNotifier {
             model: session.model,
             effort: session.effort,
             conversationId: session.conversationIdToResume,
-            systemPromptAppend: _skillRegistry.buildRoutingInstructionForPrompt(
-              prompt,
-            ),
+            // ponytail: Codex·Antigravity는 매 턴 앞에 붙으므로 긴 컨텍스트가 반복됩니다. 비용이 문제되면 첫 턴에만 붙입니다.
+            systemPromptAppend: [
+              _skillRegistry.buildRoutingInstructionForPrompt(prompt),
+              groups?.instructionsFor(session.groupId) ?? '',
+              session.instructions,
+              session.handoffContext,
+            ].where((text) => text.trim().isNotEmpty).join('\n\n'),
           ),
         );
         session.isStarted = true;
@@ -685,12 +1025,11 @@ class SessionManager extends ChangeNotifier {
     // 각 서브태스크별로 전용 백엔드(Claude Code / Codex) 세션을 생성하여 병렬 실행
     for (var i = 0; i < plan.subTasks.length; i++) {
       final subTask = plan.subTasks[i];
-      final delegatedSession = createSession(
+      final delegatedSession = createChildSession(
+        sessionId,
         title: subTask.title,
         backendType: subTask.targetBackend,
         model: subTask.targetModel,
-        effort: _inheritedEffort(masterSession, subTask.targetBackend),
-        workingDirectory: masterSession.workingDirectory,
         makeActive: i == 0,
       );
       await sendPrompt(
@@ -772,6 +1111,7 @@ class SessionManager extends ChangeNotifier {
     session.isStarted = false;
     session.status = SessionStatus.stopped;
     if (wasBusy) _markTurnInterrupted(session);
+    _recordSnapshot(session);
     _refreshAllConflictFlags();
     notifyListeners();
   }
@@ -829,6 +1169,9 @@ class SessionManager extends ChangeNotifier {
       effort: _inheritedEffort(source, targetBackend),
       workingDirectory: source.workingDirectory,
       makeActive: true,
+      groupId: source.groupId,
+      parentSessionId: sessionId,
+      instructions: source.instructions,
     );
     if (source.lastPrompt.isNotEmpty) {
       await sendPrompt(
