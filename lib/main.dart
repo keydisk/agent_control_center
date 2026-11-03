@@ -118,6 +118,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           );
         },
       );
+      _sessionManager.skillRegistry.discoverLocalSkills().ignore();
       _ownsSessionManager = true;
     }
 
@@ -147,6 +148,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     }
 
     _sessionManager.addListener(_onManagerChanged);
+    _sessionManager.skillRegistry.addListener(_onManagerChanged);
     _inboxService.addListener(_onManagerChanged);
   }
 
@@ -234,6 +236,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   void dispose() {
     _deepLinkSub?.cancel();
     _inboxService.removeListener(_onManagerChanged);
+    _sessionManager.skillRegistry.removeListener(_onManagerChanged);
     _sessionManager.removeListener(_onManagerChanged);
     if (_ownsInboxService) {
       _inboxService.dispose();
@@ -503,6 +506,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   ),
                 ),
                 PromptInputBar(
+                  skills: _sessionManager.skillRegistry.skills,
                   selectedBackend: selectedBackend,
                   selectedModel: selectedModel,
                   workingDirectory: workingDir,

@@ -233,6 +233,17 @@ void main() {
       );
       await tester.pump();
       expect(find.byKey(const ValueKey('slash_chip_/plan')), findsOneWidget);
+
+      // "/"만 입력해도 레지스트리의 스킬 목록이 함께 표시됨
+      await tester.enterText(
+        find.byKey(const ValueKey('prompt_textfield')),
+        '/',
+      );
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('slash_chip_/ego-browser')),
+        findsOneWidget,
+      );
     });
   });
 }

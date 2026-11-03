@@ -7,6 +7,7 @@ import 'package:agent_control_center/core/models/agent_models.dart';
 import 'package:agent_control_center/main.dart';
 import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/skill_registry.dart';
+import 'package:agent_control_center/ui/widgets/prompt_input_bar.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -200,6 +201,83 @@ description: Chromium browser skill for web automation
       expect(backend.sentPrompts.single, contains('ego-browser'));
 
       manager.dispose();
+    });
+
+    testWidgets('입력창 맨 앞 "/"에 활성 스킬 목록을 표시하고 선택 시 입력창에 채운다', (tester) async {
+      SkillDefinition skill(String name, {bool enabled = true}) =>
+          SkillDefinition(
+            name: name,
+            description: '$name 설명',
+            skillMdPath: '/skills/$name/SKILL.md',
+            directoryPath: '/skills/$name',
+            isEnabled: enabled,
+          );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PromptInputBar(
+              selectedBackend: BackendType.claudeCode,
+              selectedModel: BackendType.claudeCode.defaultModel,
+              workingDirectory: '/tmp',
+              onBackendChanged: (_) {},
+              onModelChanged: (_) {},
+              onWorkingDirectoryChanged: (_) {},
+              onSubmit: (_, _) {},
+              skills: [
+                skill('ego-browser'),
+                skill('Deploy-Check'),
+                skill('disabled-skill', enabled: false),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final field = find.byKey(const ValueKey('prompt_textfield'));
+      Finder chip(String name) => find.byKey(ValueKey('slash_chip_/$name'));
+
+      await tester.enterText(field, '/');
+      await tester.pump();
+      expect(chip('ego-browser'), findsOneWidget);
+      expect(chip('Deploy-Check'), findsOneWidget);
+      expect(chip('disabled-skill'), findsNothing);
+
+      // 대소문자 무관 필터링
+      await tester.enterText(field, '/dep');
+      await tester.pump();
+      expect(chip('Deploy-Check'), findsOneWidget);
+      expect(chip('ego-browser'), findsNothing);
+
+      // "/"가 맨 앞이 아니면 표시하지 않음
+      await tester.enterText(field, '설명 /ego');
+      await tester.pump();
+      expect(chip('ego-browser'), findsNothing);
+
+      // 선택 시 입력창에 채우고 목록을 닫음
+      await tester.enterText(field, '/ego');
+      await tester.pump();
+      await tester.tap(chip('ego-browser'));
+      await tester.pump();
+      expect(tester.widget<TextField>(field).controller!.text, '/ego-browser ');
+      expect(chip('ego-browser'), findsNothing);
+    });
+
+    test('로컬에서 찾은 스킬의 라우팅 지시문에 SKILL.md 경로가 포함된다', () {
+      final registry = SkillRegistry(loadDefaults: false)
+        ..registerSkill(
+          SkillDefinition(
+            name: 'deploy-check',
+            description: '배포 점검',
+            skillMdPath: '/skills/deploy-check/SKILL.md',
+            directoryPath: '/skills/deploy-check',
+          ),
+        );
+
+      expect(
+        registry.buildRoutingInstructionForPrompt('/deploy-check 실행해줘'),
+        contains('/skills/deploy-check/SKILL.md'),
+      );
     });
   });
 }
