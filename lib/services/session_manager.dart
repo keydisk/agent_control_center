@@ -10,6 +10,7 @@ import '../core/models/agent_models.dart';
 import 'agent_orchestrator.dart';
 import 'permission_center.dart';
 import 'skill_registry.dart';
+import 'trusted_folder_store.dart';
 
 enum SessionStatus {
   idle('대기'),
@@ -27,6 +28,38 @@ typedef WorktreeAllocator = Future<String> Function(
   String baseRepoDir,
   String sessionId,
 );
+
+typedef WorktreeLinkResolver = Future<WorktreeLink?> Function(
+  String baseDir,
+  String worktreePath,
+);
+
+/// 세션이 작업한 브랜치와 병합 대상 브랜치의 연결 기록
+class WorktreeLink {
+  const WorktreeLink({
+    required this.baseBranch,
+    required this.branch,
+    required this.worktreeRoot,
+    required this.startCommit,
+    this.mergeCommit,
+  });
+
+  final String baseBranch;
+  final String branch;
+  final String worktreeRoot;
+  final String startCommit;
+  final String? mergeCommit;
+
+  bool get isMerged => mergeCommit != null;
+
+  WorktreeLink merged(String commit) => WorktreeLink(
+    baseBranch: baseBranch,
+    branch: branch,
+    worktreeRoot: worktreeRoot,
+    startCommit: startCommit,
+    mergeCommit: commit,
+  );
+}
 
 class ManagedSession {
   ManagedSession({
@@ -65,6 +98,15 @@ class ManagedSession {
   final List<AgentEvent> events;
   final List<String> rawLogs;
   final Set<String> resolvedRequestIds = {};
+  final List<WorktreeLink> worktreeLinks = [];
+
+  /// 현재 작업 중이며 아직 병합되지 않은 worktree 연결
+  WorktreeLink? get activeWorktreeLink =>
+      isolatedWorktreePath != null &&
+          worktreeLinks.isNotEmpty &&
+          !worktreeLinks.last.isMerged
+      ? worktreeLinks.last
+      : null;
 
   StreamSubscription<AgentEvent>? eventSub;
   StreamSubscription<String>? logSub;
@@ -81,6 +123,9 @@ class SessionManager extends ChangeNotifier {
     SkillRegistry? skillRegistry,
     AgentOrchestrator? orchestrator,
     WorktreeAllocator? worktreeAllocator,
+    this.trustedFolders,
+    this.autoIsolateWithWorktree = false,
+    this.onFolderTrustRequired,
     this.autoOrchestrateByAntigravity = true,
     this.onApprovalRequired,
     this.onQuestionRequired,
@@ -89,13 +134,23 @@ class SessionManager extends ChangeNotifier {
        _permissionCenter = permissionCenter ?? PermissionCenter(),
        _skillRegistry = skillRegistry ?? SkillRegistry(),
        _orchestrator = orchestrator ?? const AgentOrchestrator(),
-       _worktreeAllocator = worktreeAllocator ?? _defaultWorktreeAllocator;
+       _worktreeAllocator = worktreeAllocator ?? _defaultWorktreeAllocator,
+       // 주입된 할당기의 경로는 실제 checkout이 아닐 수 있어 연결 정보를 읽지 않습니다.
+       _resolveWorktreeLink = worktreeAllocator == null
+           ? _defaultWorktreeLinkResolver
+           : ((_, _) async => null);
 
   final BackendRegistry _registry;
   final PermissionCenter _permissionCenter;
   final SkillRegistry _skillRegistry;
   final AgentOrchestrator _orchestrator;
   final WorktreeAllocator _worktreeAllocator;
+  final WorktreeLinkResolver _resolveWorktreeLink;
+
+  /// null이면 폴더 신뢰 검사를 하지 않습니다.
+  final TrustedFolderStore? trustedFolders;
+  final bool autoIsolateWithWorktree;
+  final Future<bool> Function(ManagedSession session)? onFolderTrustRequired;
   bool autoOrchestrateByAntigravity;
 
   final void Function(ManagedSession session, ApprovalRequestData request)?
@@ -105,6 +160,7 @@ class SessionManager extends ChangeNotifier {
   final void Function(ManagedSession session, bool success)? onSessionFinished;
 
   final Map<String, ManagedSession> _sessions = {};
+  final Set<String> _mergingSessionIds = {};
   String? _activeSessionId;
   int _counter = 0;
 
@@ -219,6 +275,7 @@ class SessionManager extends ChangeNotifier {
         session.usage = session.usage + event.usage;
         session.status = SessionStatus.completed;
         _refreshAllConflictFlags();
+        unawaited(_detectMergeByAgent(session));
         onSessionFinished?.call(session, true);
       } else if (event is ErrorEvent) {
         session.status = SessionStatus.failed;
@@ -297,10 +354,131 @@ class SessionManager extends ChangeNotifier {
     }
     session.conversationIdToResume = null;
     session.isolatedWorktreePath = worktreePath;
+    final link = await _resolveWorktreeLink(
+      session.workingDirectory,
+      worktreePath,
+    );
+    if (link != null) session.worktreeLinks.add(link);
     session.hasDirectoryConflict = false;
     _refreshAllConflictFlags();
     notifyListeners();
     return worktreePath;
+  }
+
+  /// 세션 브랜치의 변경을 커밋하고 시작 브랜치로 병합한 뒤 worktree를 정리합니다.
+  Future<void> mergeSessionWorktree(String sessionId) async {
+    final session = _sessions[sessionId];
+    final link = session?.activeWorktreeLink;
+    if (session == null || link == null) {
+      throw StateError('병합할 worktree가 없습니다.');
+    }
+    if (session.status == SessionStatus.running ||
+        session.status == SessionStatus.awaitingApproval) {
+      throw StateError('실행 중인 세션은 병합할 수 없습니다.');
+    }
+    if (!_mergingSessionIds.add(sessionId)) return;
+    try {
+      final baseDir = session.workingDirectory;
+      final current = await _gitOutput(baseDir, [
+        'rev-parse',
+        '--abbrev-ref',
+        'HEAD',
+      ]);
+      if (current != link.baseBranch) {
+        throw StateError(
+          '${p.basename(baseDir)} 체크아웃이 ${link.baseBranch}가 아닌 $current에 있습니다.',
+        );
+      }
+      final dirty = await _gitOutput(link.worktreeRoot, [
+        'status',
+        '--porcelain',
+      ]);
+      if (dirty == null) {
+        throw StateError('worktree 상태를 읽을 수 없습니다: ${link.worktreeRoot}');
+      }
+      if (dirty.isNotEmpty) {
+        await _gitOrThrow(link.worktreeRoot, ['add', '-A']);
+        await _gitOrThrow(link.worktreeRoot, [
+          'commit',
+          '-m',
+          '작업 반영: ${session.title}',
+        ]);
+      }
+      final tip = await _gitOutput(link.worktreeRoot, ['rev-parse', 'HEAD']);
+      if (tip == link.startCommit) {
+        throw StateError('병합할 변경 사항이 없습니다.');
+      }
+      final merge = await _runGit(baseDir, [
+        'merge',
+        '--no-ff',
+        '-m',
+        '병합: ${session.title} (${link.branch})',
+        link.branch,
+      ]);
+      if (merge.exitCode != 0) {
+        await _runGit(baseDir, ['merge', '--abort']);
+        throw StateError('병합 실패: ${merge.stdout}${merge.stderr}'.trim());
+      }
+      await _completeMerge(session, link);
+    } finally {
+      _mergingSessionIds.remove(sessionId);
+    }
+  }
+
+  /// 에이전트가 직접 병합한 경우에도 연결 고리를 표시합니다.
+  Future<void> _detectMergeByAgent(ManagedSession session) async {
+    final link = session.activeWorktreeLink;
+    if (link == null || _mergingSessionIds.contains(session.sessionId)) return;
+    final baseDir = session.workingDirectory;
+    final tip = await _gitOutput(baseDir, ['rev-parse', link.branch]);
+    if (tip == null || tip == link.startCommit) return;
+    final isAncestor = await _runGit(baseDir, [
+      'merge-base',
+      '--is-ancestor',
+      tip,
+      link.baseBranch,
+    ]);
+    if (isAncestor.exitCode != 0 || session.activeWorktreeLink != link) return;
+    await _completeMerge(session, link, target: link.baseBranch);
+  }
+
+  Future<void> _completeMerge(
+    ManagedSession session,
+    WorktreeLink link, {
+    String target = 'HEAD',
+  }) async {
+    final baseDir = session.workingDirectory;
+    final commit = await _gitOutput(baseDir, ['rev-parse', '--short', target]);
+    session.worktreeLinks.last = link.merged(commit ?? link.baseBranch);
+    // 미커밋 파일이 남아 제거가 거부되면 작업 손실을 막기 위해 worktree를 유지합니다.
+    final removed = await _runGit(baseDir, [
+      'worktree',
+      'remove',
+      link.worktreeRoot,
+    ]);
+    if (removed.exitCode == 0) {
+      await _runGit(baseDir, ['branch', '-d', link.branch]);
+      session.isolatedWorktreePath = null;
+      session.isStarted = false;
+      session.conversationIdToResume = null;
+      final parent = Directory(p.dirname(link.worktreeRoot));
+      if (p.basename(parent.path).startsWith('acc_worktree_')) {
+        await parent.delete().then<void>((_) {}, onError: (_) {});
+      }
+    }
+    _refreshAllConflictFlags();
+    notifyListeners();
+  }
+
+  Future<void> _ensureFolderTrusted(ManagedSession session) async {
+    final store = trustedFolders;
+    final dir = session.workingDirectory;
+    if (store == null || store.isTrusted(dir)) return;
+    final allowed = await onFolderTrustRequired?.call(session) ?? false;
+    if (!allowed) {
+      throw StateError('신뢰하지 않은 폴더라 실행하지 않았습니다: $dir');
+    }
+    store.add(dir);
   }
 
   Future<void> sendPrompt(
@@ -313,8 +491,21 @@ class SessionManager extends ChangeNotifier {
     final session = _sessions[sessionId];
     if (session == null) return;
 
+    session.lastPrompt = prompt;
+    session.lastAttachments = List.of(attachments);
     try {
-      if (isolateWithWorktree && session.isolatedWorktreePath == null) {
+      await _ensureFolderTrusted(session);
+      final shouldIsolate =
+          isolateWithWorktree ||
+          (autoIsolateWithWorktree &&
+              !session.isStarted &&
+              await _gitOutput(session.workingDirectory, [
+                    'rev-parse',
+                    '--verify',
+                    'HEAD',
+                  ]) !=
+                  null);
+      if (shouldIsolate && session.isolatedWorktreePath == null) {
         await isolateSessionWithWorktree(sessionId);
       } else {
         final conflicts = findConflictingSessions(
@@ -324,8 +515,6 @@ class SessionManager extends ChangeNotifier {
         session.hasDirectoryConflict = conflicts.isNotEmpty;
       }
 
-      session.lastPrompt = prompt;
-      session.lastAttachments = List.of(attachments);
       if (session.title.startsWith('작업 #') && prompt.trim().isNotEmpty) {
         final shortTitle = prompt.trim().split('\n').first;
         session.title = shortTitle.length > 28
@@ -592,6 +781,60 @@ class SessionManager extends ChangeNotifier {
     session.isolatedWorktreePath = null;
     _refreshAllConflictFlags();
     notifyListeners();
+  }
+
+  static Future<ProcessResult> _runGit(String dir, List<String> args) =>
+      Process.run('git', args, workingDirectory: dir);
+
+  static Future<void> _gitOrThrow(String dir, List<String> args) async {
+    final result = await _runGit(dir, args);
+    if (result.exitCode != 0) {
+      throw StateError('git ${args.first} 실패: ${result.stderr}'.trim());
+    }
+  }
+
+  /// 명령 실패나 사라진 디렉터리는 null로 돌려줍니다.
+  static Future<String?> _gitOutput(String dir, List<String> args) async {
+    try {
+      final result = await _runGit(dir, args);
+      return result.exitCode == 0 ? result.stdout.toString().trim() : null;
+    } on ProcessException catch (_) {
+      return null;
+    }
+  }
+
+  static Future<WorktreeLink?> _defaultWorktreeLinkResolver(
+    String baseDir,
+    String worktreePath,
+  ) async {
+    final base = await _gitOutput(baseDir, [
+      'rev-parse',
+      '--abbrev-ref',
+      'HEAD',
+    ]);
+    final branch = await _gitOutput(worktreePath, [
+      'rev-parse',
+      '--abbrev-ref',
+      'HEAD',
+    ]);
+    final root = await _gitOutput(worktreePath, [
+      'rev-parse',
+      '--show-toplevel',
+    ]);
+    final start = await _gitOutput(worktreePath, ['rev-parse', 'HEAD']);
+    if (base == null ||
+        base == 'HEAD' ||
+        branch == null ||
+        root == null ||
+        start == null) {
+      return null;
+    }
+    return WorktreeLink(
+      baseBranch: base,
+      branch: branch,
+      worktreeRoot: root,
+      startCommit: start,
+    );
   }
 
   static Future<String> _defaultWorktreeAllocator(
