@@ -655,8 +655,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: isUser
-                ? Theme.of(context).colorScheme.primaryContainer
-                      .withValues(alpha: 0.35)
+                ? context.mac.selection
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
