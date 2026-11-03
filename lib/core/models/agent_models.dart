@@ -637,6 +637,16 @@ class SkillInvokedEvent extends AgentEvent {
   String get eventKind => 'skill_invoked';
 }
 
+enum ChildWorktreeStatus {
+  running('작업 중'),
+  completed('작업 완료'),
+  failed('작업 실패'),
+  stopped('작업 중지');
+
+  const ChildWorktreeStatus(this.label);
+  final String label;
+}
+
 /// 하위 세션의 worktree 작업 상태를 상위 세션 타임라인에 알립니다.
 class ChildWorktreeEvent extends AgentEvent {
   const ChildWorktreeEvent({
@@ -647,6 +657,7 @@ class ChildWorktreeEvent extends AgentEvent {
     required this.childSessionId,
     required this.childTitle,
     required this.message,
+    this.status = ChildWorktreeStatus.running,
     this.summary = '',
     this.needsAttention = false,
     this.canMerge = false,
@@ -657,6 +668,7 @@ class ChildWorktreeEvent extends AgentEvent {
   final String childSessionId;
   final String childTitle;
   final String message;
+  final ChildWorktreeStatus status;
   final String summary;
   final bool needsAttention;
   final bool canMerge;

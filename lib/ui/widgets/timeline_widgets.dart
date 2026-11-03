@@ -43,7 +43,12 @@ class ChildWorktreeNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mac = context.mac;
-    final color = event.needsAttention ? mac.orange : mac.blue;
+    final color = switch (event.status) {
+      ChildWorktreeStatus.failed => mac.red,
+      ChildWorktreeStatus.stopped => mac.orange,
+      ChildWorktreeStatus.completed when !event.needsAttention => mac.green,
+      _ => event.needsAttention ? mac.orange : mac.blue,
+    };
     return Container(
       key: ValueKey('child_notice_${event.childSessionId}'),
       margin: const EdgeInsets.symmetric(vertical: 6),
@@ -57,7 +62,16 @@ class ChildWorktreeNotice extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.call_split, size: 15, color: color),
+              Icon(
+                switch (event.status) {
+                  ChildWorktreeStatus.completed => Icons.check_circle_outline,
+                  ChildWorktreeStatus.failed => Icons.error_outline,
+                  ChildWorktreeStatus.stopped => Icons.stop_circle_outlined,
+                  ChildWorktreeStatus.running => Icons.call_split,
+                },
+                size: 15,
+                color: color,
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -83,16 +97,16 @@ class ChildWorktreeNotice extends StatelessWidget {
                 ),
             ],
           ),
+          Text(
+            event.status.label,
+            key: ValueKey('child_status_${event.childSessionId}'),
+            style: TextStyle(color: color, fontWeight: FontWeight.w600),
+          ),
           Text(event.message, style: const TextStyle(fontSize: 12)),
           if (event.summary.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                event.summary,
-                maxLines: 4,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 11.5, color: mac.secondaryLabel),
-              ),
+              child: MarkdownMessageView(markdown: event.summary),
             ),
         ],
       ),
