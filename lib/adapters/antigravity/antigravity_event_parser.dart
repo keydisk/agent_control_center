@@ -74,8 +74,8 @@ class AntigravityEventParser {
         );
       }
 
-      // 2. 사용자 입력 단계는 타임라인 중복 방지를 위해 무시
-      if (stepType == 'user_input') {
+      // 2. 사용자 입력과 내부 시스템 메시지 단계는 타임라인에 표시하지 않음
+      if (stepType == 'user_input' || stepType == 'system_message') {
         return events;
       }
 
