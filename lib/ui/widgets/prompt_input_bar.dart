@@ -1,6 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+
+import '../theme/mac_theme.dart';
+
 import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
@@ -306,12 +309,9 @@ class _PromptInputBarState extends State<PromptInputBar> {
         ? widget.selectedModel
         : widget.selectedBackend.defaultModel;
 
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-      ),
+    final mac = context.mac;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -344,120 +344,162 @@ class _PromptInputBarState extends State<PromptInputBar> {
               ),
             ),
 
-          // 상단 제어 바: 백엔드 선택, 모델 선택, 작업 폴더 선택
-          Wrap(
-            spacing: 10,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              DropdownButtonHideUnderline(
-                child: DropdownButton<BackendType>(
-                  key: const ValueKey('backend_dropdown'),
-                  value: widget.selectedBackend,
-                  isDense: true,
-                  items: [
-                    for (final b in BackendType.values)
-                      DropdownMenuItem(
-                        value: b,
-                        child: Text(
-                          b.displayName,
-                          style: const TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+          // 입력창과 제어 버튼을 묶은 작성 영역
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: mac.fill,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: mac.separator, width: 0.5),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    key: const ValueKey('prompt_textfield'),
+                    controller: _controller,
+                    focusNode: _focusNode,
+                    minLines: 1,
+                    maxLines: 6,
+                    decoration: InputDecoration(
+                      hintText:
+                          '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령·스킬 자동완성)',
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 4,
+                        vertical: 8,
                       ),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) {
-                      widget.onBackendChanged(val);
-                    }
-                  },
-                ),
-              ),
-              DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  key: const ValueKey('model_dropdown'),
-                  value: activeModel,
-                  isDense: true,
-                  items: [
-                    for (final m in models)
-                      DropdownMenuItem(
-                        value: m,
-                        child: Text(m, style: const TextStyle(fontSize: 12)),
-                      ),
-                  ],
-                  onChanged: (val) {
-                    if (val != null) {
-                      widget.onModelChanged(val);
-                    }
-                  },
-                ),
-              ),
-              OutlinedButton.icon(
-                key: const ValueKey('workdir_button'),
-                onPressed: _showWorkingDirDialog,
-                icon: const Icon(Icons.folder_open, size: 15),
-                label: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 220),
-                  child: Text(
-                    widget.workingDirectory,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 11.5),
+                    ),
                   ),
-                ),
+                  Row(
+                    children: [
+                      IconButton(
+                        key: const ValueKey('attach_button'),
+                        tooltip: '파일/이미지 첨부',
+                        onPressed: _showAddAttachmentDialog,
+                        icon: const Icon(Icons.attach_file),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(child: _buildControls(activeModel, models)),
+                      const SizedBox(width: 8),
+                      _buildSendButton(mac),
+                    ],
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
 
-          // 멀티라인 프롬프트 입력창 및 액션 버튼
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              IconButton(
-                key: const ValueKey('attach_button'),
-                tooltip: '파일/이미지 첨부',
-                onPressed: _showAddAttachmentDialog,
-                icon: const Icon(Icons.attach_file),
-              ),
-              Expanded(
-                child: TextField(
-                  key: const ValueKey('prompt_textfield'),
-                  controller: _controller,
-                  focusNode: _focusNode,
-                  minLines: 1,
-                  maxLines: 5,
-                  decoration: InputDecoration(
-                    hintText:
-                        '에이전트에게 작업을 지시하세요... ("/" 입력 시 ${widget.selectedBackend.displayName} 슬래시 명령·스킬 자동완성)',
-                    border: const OutlineInputBorder(),
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+  /// 백엔드·모델·작업 폴더 선택
+  Widget _buildControls(String activeModel, List<String> models) {
+    final mac = context.mac;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        DropdownButtonHideUnderline(
+          child: DropdownButton<BackendType>(
+            key: const ValueKey('backend_dropdown'),
+            value: widget.selectedBackend,
+            isDense: true,
+            iconSize: 14,
+            focusColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            items: [
+              for (final b in BackendType.values)
+                DropdownMenuItem(
+                  value: b,
+                  child: Text(
+                    b.displayName,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: mac.label,
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              if (widget.isBusy && widget.onInterrupt != null)
-                FilledButton.tonalIcon(
-                  key: const ValueKey('interrupt_button'),
-                  onPressed: widget.onInterrupt,
-                  icon: const Icon(Icons.stop_circle_outlined, size: 18),
-                  label: const Text('중지'),
-                )
-              else
-                FilledButton.icon(
-                  key: const ValueKey('send_button'),
-                  onPressed: _handleSend,
-                  icon: const Icon(Icons.send_rounded, size: 16),
-                  label: const Text('전송'),
+            ],
+            onChanged: (val) {
+              if (val != null) {
+                widget.onBackendChanged(val);
+              }
+            },
+          ),
+        ),
+        DropdownButtonHideUnderline(
+          child: DropdownButton<String>(
+            key: const ValueKey('model_dropdown'),
+            value: activeModel,
+            isDense: true,
+            iconSize: 14,
+            focusColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+            items: [
+              for (final m in models)
+                DropdownMenuItem(
+                  value: m,
+                  child: Text(
+                    m,
+                    style: TextStyle(fontSize: 12, color: mac.secondaryLabel),
+                  ),
                 ),
             ],
+            onChanged: (val) {
+              if (val != null) {
+                widget.onModelChanged(val);
+              }
+            },
           ),
-        ],
+        ),
+        TextButton.icon(
+          key: const ValueKey('workdir_button'),
+          onPressed: _showWorkingDirDialog,
+          style: TextButton.styleFrom(
+            foregroundColor: mac.secondaryLabel,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+          ),
+          icon: const Icon(Icons.folder_outlined, size: 14),
+          label: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Text(
+              widget.workingDirectory,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSendButton(MacColors mac) {
+    final interrupting = widget.isBusy && widget.onInterrupt != null;
+    return IconButton(
+      key: ValueKey(interrupting ? 'interrupt_button' : 'send_button'),
+      tooltip: interrupting ? '중지' : '전송',
+      onPressed: interrupting ? widget.onInterrupt : _handleSend,
+      style: IconButton.styleFrom(
+        backgroundColor: interrupting
+            ? mac.red
+            : Theme.of(context).colorScheme.primary,
+        foregroundColor: Colors.white,
+        shape: const CircleBorder(),
+      ),
+      icon: Icon(
+        interrupting ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+        size: 16,
       ),
     );
   }

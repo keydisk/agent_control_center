@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 
+import '../theme/mac_theme.dart';
+
 import '../../core/models/agent_models.dart';
 import '../../services/session_manager.dart';
+import 'mac_window_drag_area.dart';
 import 'timeline_widgets.dart';
 
 class MultiSessionSidebar extends StatelessWidget {
@@ -42,379 +45,111 @@ class MultiSessionSidebar extends StatelessWidget {
   final VoidCallback? onManageTrustedFolders;
   final ValueChanged<String>? onMergeWorktree;
 
-  Color _statusColor(SessionStatus status) {
-    switch (status) {
-      case SessionStatus.idle:
-        return Colors.grey;
-      case SessionStatus.running:
-        return Colors.lightBlueAccent;
-      case SessionStatus.awaitingApproval:
-        return Colors.orangeAccent;
-      case SessionStatus.completed:
-        return Colors.greenAccent;
-      case SessionStatus.failed:
-        return Colors.redAccent;
-      case SessionStatus.stopped:
-        return Colors.amber;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
+    final mac = context.mac;
     return Container(
-      width: 270,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerLow,
-        border: Border(
-          right: BorderSide(color: Theme.of(context).dividerColor),
-        ),
-      ),
+      width: 260,
+      color: mac.sidebar,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.layers_outlined, size: 18),
-                const SizedBox(width: 6),
-                const Expanded(
-                  child: Text(
-                    '병렬 작업 세션',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                  ),
-                ),
-                PopupMenuButton<BackendType>(
-                  key: const ValueKey('new_session_menu_button'),
-                  tooltip: '새 작업 세션 추가',
-                  onSelected: onCreateSession,
-                  itemBuilder: (context) => [
-                    for (final b in BackendType.values)
-                      PopupMenuItem(
-                        key: ValueKey('new_session_${b.id}'),
-                        value: b,
-                        child: Text('+ ${b.displayName} 세션'),
+          // 신호등 버튼 자리를 비워 둔 상단 영역
+          MacWindowDragArea(
+            child: SizedBox(
+              height: 52,
+              width: double.infinity,
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 10),
+                  child: PopupMenuButton<BackendType>(
+                    key: const ValueKey('new_session_menu_button'),
+                    tooltip: '새 작업 세션 추가',
+                    onSelected: onCreateSession,
+                    itemBuilder: (context) => [
+                      for (final b in BackendType.values)
+                        PopupMenuItem(
+                          key: ValueKey('new_session_${b.id}'),
+                          value: b,
+                          height: 28,
+                          child: Text('${b.displayName} 세션'),
+                        ),
+                    ],
+                    child: Padding(
+                      padding: const EdgeInsets.all(5),
+                      child: Icon(
+                        Icons.edit_square,
+                        size: 16,
+                        color: mac.secondaryLabel,
                       ),
-                  ],
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.add, size: 15),
-                        SizedBox(width: 4),
-                        Text('새 작업', style: TextStyle(fontSize: 11.5)),
-                      ],
                     ),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-          const Divider(height: 1),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.account_tree_outlined,
+          const _SidebarSectionLabel('작업 세션'),
+          Expanded(
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: sessions.length,
+              itemBuilder: (context, index) {
+                final session = sessions[index];
+                return _SessionRow(
+                  session: session,
+                  isSelected: session.sessionId == activeSessionId,
+                  onSelect: () => onSelectSession(session.sessionId),
+                  onStop: () => onStopSession(session.sessionId),
+                  onRetry: () => onRetrySession(session.sessionId),
+                  onRerun: (b) => onRerunWithBackend(session.sessionId, b),
+                  onIsolate: () => onIsolateWorktree(session.sessionId),
+                  onMerge: () => onMergeWorktree?.call(session.sessionId),
+                );
+              },
+            ),
+          ),
+          const Divider(),
+          if (trustedFolderCount != null)
+            InkWell(
+              key: const ValueKey('open_trusted_folders_button'),
+              onTap: onManageTrustedFolders,
+              child: _SidebarSettingRow(
+                icon: Icons.verified_user_outlined,
+                label: '신뢰 폴더 ($trustedFolderCount)',
+                trailing: Icon(
+                  Icons.chevron_right,
                   size: 14,
-                  color: Colors.lightBlueAccent,
+                  color: mac.tertiaryLabel,
                 ),
-                const SizedBox(width: 6),
-                const Expanded(
-                  child: Text(
-                    'Antigravity 자동 오케스트레이션',
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                Switch(
+              ),
+            ),
+          _SidebarSettingRow(
+            icon: Icons.account_tree_outlined,
+            label: '자동 오케스트레이션',
+            tooltip: 'Antigravity 자동 오케스트레이션',
+            trailing: SizedBox(
+              height: 18,
+              child: FittedBox(
+                child: Switch(
                   key: const ValueKey('auto_orchestrate_switch'),
                   value: autoOrchestrateByAntigravity,
                   materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   onChanged: (v) => onAutoOrchestrateChanged?.call(v),
                 ),
-              ],
-            ),
-          ),
-          if (trustedFolderCount != null) ...[
-            const Divider(height: 1),
-            InkWell(
-              key: const ValueKey('open_trusted_folders_button'),
-              onTap: onManageTrustedFolders,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 8,
-                ),
-                child: Row(
-                  children: [
-                    const Icon(
-                      Icons.verified_user_outlined,
-                      size: 14,
-                      color: Colors.greenAccent,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        '신뢰 폴더 ($trustedFolderCount)',
-                        style: const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right, size: 14),
-                  ],
-                ),
               ),
             ),
-          ],
-          const Divider(height: 1),
-          Expanded(
-            child: ListView.builder(
-              padding: const EdgeInsets.all(8),
-              itemCount: sessions.length,
-              itemBuilder: (context, index) {
-                final session = sessions[index];
-                final isSelected = session.sessionId == activeSessionId;
-                final statusColor = _statusColor(session.status);
-
-                return Card(
-                  key: ValueKey('session_card_${session.sessionId}'),
-                  margin: const EdgeInsets.only(bottom: 8),
-                  color: isSelected
-                      ? Theme.of(
-                          context,
-                        ).colorScheme.primaryContainer.withValues(alpha: 0.35)
-                      : Theme.of(context).colorScheme.surfaceContainer,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    side: BorderSide(
-                      color: isSelected
-                          ? Theme.of(context).colorScheme.primary
-                          : Colors.transparent,
-                    ),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => onSelectSession(session.sessionId),
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  session.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 12.5,
-                                  ),
-                                ),
-                              ),
-                              Container(
-                                key: ValueKey(
-                                  'session_status_${session.sessionId}',
-                                ),
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 6,
-                                  vertical: 2,
-                                ),
-                                decoration: BoxDecoration(
-                                  color: statusColor.withValues(alpha: 0.18),
-                                  borderRadius: BorderRadius.circular(4),
-                                  border: Border.all(
-                                    color: statusColor.withValues(alpha: 0.5),
-                                  ),
-                                ),
-                                child: Text(
-                                  session.status.label,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: statusColor,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: BackendModelBadge(
-                                  backend: session.backendType,
-                                  model: session.model,
-                                ),
-                              ),
-                              if (session.status == SessionStatus.running ||
-                                  session.status ==
-                                      SessionStatus.awaitingApproval)
-                                IconButton(
-                                  key: ValueKey(
-                                    'stop_session_${session.sessionId}',
-                                  ),
-                                  icon: const Icon(
-                                    Icons.stop_circle_outlined,
-                                    size: 16,
-                                    color: Colors.redAccent,
-                                  ),
-                                  tooltip: '작업 중지',
-                                  visualDensity: VisualDensity.compact,
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  onPressed: () =>
-                                      onStopSession(session.sessionId),
-                                ),
-                              const SizedBox(width: 4),
-                              IconButton(
-                                key: ValueKey(
-                                  'retry_session_${session.sessionId}',
-                                ),
-                                icon: const Icon(Icons.refresh, size: 16),
-                                tooltip: '재시도',
-                                visualDensity: VisualDensity.compact,
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                onPressed: () =>
-                                    onRetrySession(session.sessionId),
-                              ),
-                              PopupMenuButton<BackendType>(
-                                key: ValueKey(
-                                  'rerun_menu_${session.sessionId}',
-                                ),
-                                tooltip: '다른 백엔드로 재실행',
-                                icon: const Icon(Icons.swap_horiz, size: 16),
-                                padding: EdgeInsets.zero,
-                                onSelected: (b) =>
-                                    onRerunWithBackend(session.sessionId, b),
-                                itemBuilder: (context) => [
-                                  for (final b in BackendType.values)
-                                    PopupMenuItem(
-                                      key: ValueKey(
-                                        'rerun_${session.sessionId}_${b.id}',
-                                      ),
-                                      value: b,
-                                      child: Text('${b.displayName}(으)로 재실행'),
-                                    ),
-                                ],
-                              ),
-                            ],
-                          ),
-                          if (session.hasDirectoryConflict) ...[
-                            const SizedBox(height: 6),
-                            Container(
-                              key: ValueKey(
-                                'conflict_warning_${session.sessionId}',
-                              ),
-                              padding: const EdgeInsets.all(6),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.withValues(alpha: 0.15),
-                                borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: Colors.amber.withValues(alpha: 0.5),
-                                ),
-                              ),
-                              child: Row(
-                                children: [
-                                  const Icon(
-                                    Icons.warning_amber_rounded,
-                                    size: 14,
-                                    color: Colors.amber,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  const Expanded(
-                                    child: Text(
-                                      '동일 폴더 동시 작업 충돌',
-                                      style: TextStyle(
-                                        fontSize: 10.5,
-                                        color: Colors.amber,
-                                      ),
-                                    ),
-                                  ),
-                                  InkWell(
-                                    key: ValueKey(
-                                      'isolate_worktree_${session.sessionId}',
-                                    ),
-                                    onTap: () =>
-                                        onIsolateWorktree(session.sessionId),
-                                    child: const Padding(
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 4,
-                                        vertical: 2,
-                                      ),
-                                      child: Text(
-                                        'worktree 분리',
-                                        style: TextStyle(
-                                          fontSize: 10.5,
-                                          fontWeight: FontWeight.bold,
-                                          decoration: TextDecoration.underline,
-                                          color: Colors.lightBlueAccent,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                          for (final link in session.worktreeLinks) ...[
-                            const SizedBox(height: 6),
-                            _WorktreeLinkView(
-                              link: link,
-                              onMerge: identical(
-                                    link,
-                                    session.activeWorktreeLink,
-                                  )
-                                  ? () => onMergeWorktree?.call(
-                                      session.sessionId,
-                                    )
-                                  : null,
-                            ),
-                          ],
-                          if (session.isolatedWorktreePath != null) ...[
-                            const SizedBox(height: 4),
-                            Text(
-                              '격리 Worktree: ${session.isolatedWorktreePath}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: Colors.greenAccent,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                );
-              },
-            ),
           ),
-          const Divider(height: 1),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
             child: Row(
               children: [
-                const Icon(Icons.devices_outlined, size: 15),
-                const SizedBox(width: 6),
+                Icon(
+                  Icons.devices_outlined,
+                  size: 14,
+                  color: mac.secondaryLabel,
+                ),
+                const SizedBox(width: 8),
                 Expanded(
                   child: DropdownButtonHideUnderline(
                     child: DropdownButton<TargetDeviceType>(
@@ -422,6 +157,9 @@ class MultiSessionSidebar extends StatelessWidget {
                       value: selectedDevice,
                       isDense: true,
                       isExpanded: true,
+                      iconSize: 14,
+                      focusColor: Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
                       items: [
                         for (final d in TargetDeviceType.values)
                           DropdownMenuItem(
@@ -429,7 +167,7 @@ class MultiSessionSidebar extends StatelessWidget {
                             child: Text(
                               d.label,
                               overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 11.5),
+                              style: TextStyle(fontSize: 12, color: mac.label),
                             ),
                           ),
                       ],
@@ -444,8 +182,313 @@ class MultiSessionSidebar extends StatelessWidget {
               ],
             ),
           ),
-          const Divider(height: 1),
+          const Divider(),
           _BackendUsageFooter(usageByBackend: usageByBackend),
+        ],
+      ),
+    );
+  }
+}
+
+class _SidebarSectionLabel extends StatelessWidget {
+  const _SidebarSectionLabel(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          color: context.mac.secondaryLabel,
+        ),
+      ),
+    );
+  }
+}
+
+class _SidebarSettingRow extends StatelessWidget {
+  const _SidebarSettingRow({
+    required this.icon,
+    required this.label,
+    required this.trailing,
+    this.tooltip,
+  });
+
+  final IconData icon;
+  final String label;
+  final Widget trailing;
+  final String? tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    return Tooltip(
+      message: tooltip ?? '',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        child: Row(
+          children: [
+            Icon(icon, size: 14, color: mac.secondaryLabel),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12, color: mac.label),
+              ),
+            ),
+            trailing,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 사이드바 소스 목록의 세션 한 줄
+class _SessionRow extends StatelessWidget {
+  const _SessionRow({
+    required this.session,
+    required this.isSelected,
+    required this.onSelect,
+    required this.onStop,
+    required this.onRetry,
+    required this.onRerun,
+    required this.onIsolate,
+    required this.onMerge,
+  });
+
+  final ManagedSession session;
+  final bool isSelected;
+  final VoidCallback onSelect;
+  final VoidCallback onStop;
+  final VoidCallback onRetry;
+  final ValueChanged<BackendType> onRerun;
+  final VoidCallback onIsolate;
+  final VoidCallback onMerge;
+
+  Color _statusColor(MacColors mac) {
+    switch (session.status) {
+      case SessionStatus.idle:
+        return mac.tertiaryLabel;
+      case SessionStatus.running:
+        return mac.blue;
+      case SessionStatus.awaitingApproval:
+      case SessionStatus.stopped:
+        return mac.orange;
+      case SessionStatus.completed:
+        return mac.green;
+      case SessionStatus.failed:
+        return mac.red;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    final statusColor = _statusColor(mac);
+    final isBusy =
+        session.status == SessionStatus.running ||
+        session.status == SessionStatus.awaitingApproval;
+
+    return Padding(
+      key: ValueKey('session_card_${session.sessionId}'),
+      padding: const EdgeInsets.only(bottom: 2),
+      child: Material(
+        color: isSelected ? mac.selection : Colors.transparent,
+        borderRadius: BorderRadius.circular(6),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(6),
+          onTap: onSelect,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: statusColor,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        session.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: mac.label,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      session.status.label,
+                      key: ValueKey('session_status_${session.sessionId}'),
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        color: mac.secondaryLabel,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 3),
+                Padding(
+                  padding: const EdgeInsets.only(left: 14),
+                  child: BackendModelBadge(
+                    backend: session.backendType,
+                    model: session.model,
+                  ),
+                ),
+                if (isSelected || isBusy)
+                  _SessionActions(
+                    session: session,
+                    isBusy: isBusy,
+                    onStop: onStop,
+                    onRetry: onRetry,
+                    onRerun: onRerun,
+                  ),
+                if (session.hasDirectoryConflict)
+                  _ConflictNotice(session: session, onIsolate: onIsolate),
+                for (final link in session.worktreeLinks) ...[
+                  const SizedBox(height: 6),
+                  _WorktreeLinkView(
+                    link: link,
+                    onMerge: identical(link, session.activeWorktreeLink)
+                        ? onMerge
+                        : null,
+                  ),
+                ],
+                if (session.isolatedWorktreePath != null &&
+                    session.worktreeLinks.isEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    '격리 Worktree: ${session.isolatedWorktreePath}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 10.5, color: mac.secondaryLabel),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SessionActions extends StatelessWidget {
+  const _SessionActions({
+    required this.session,
+    required this.isBusy,
+    required this.onStop,
+    required this.onRetry,
+    required this.onRerun,
+  });
+
+  final ManagedSession session;
+  final bool isBusy;
+  final VoidCallback onStop;
+  final VoidCallback onRetry;
+  final ValueChanged<BackendType> onRerun;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    return Padding(
+      padding: const EdgeInsets.only(top: 2),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (isBusy)
+            IconButton(
+              key: ValueKey('stop_session_${session.sessionId}'),
+              icon: Icon(Icons.stop_rounded, size: 15, color: mac.red),
+              tooltip: '작업 중지',
+              onPressed: onStop,
+            ),
+          IconButton(
+            key: ValueKey('retry_session_${session.sessionId}'),
+            icon: const Icon(Icons.refresh, size: 15),
+            tooltip: '재시도',
+            onPressed: onRetry,
+          ),
+          PopupMenuButton<BackendType>(
+            key: ValueKey('rerun_menu_${session.sessionId}'),
+            tooltip: '다른 백엔드로 재실행',
+            onSelected: onRerun,
+            itemBuilder: (context) => [
+              for (final b in BackendType.values)
+                PopupMenuItem(
+                  key: ValueKey('rerun_${session.sessionId}_${b.id}'),
+                  value: b,
+                  height: 28,
+                  child: Text('${b.displayName}(으)로 재실행'),
+                ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.all(5),
+              child: Icon(
+                Icons.swap_horiz,
+                size: 15,
+                color: mac.secondaryLabel,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ConflictNotice extends StatelessWidget {
+  const _ConflictNotice({required this.session, required this.onIsolate});
+
+  final ManagedSession session;
+  final VoidCallback onIsolate;
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    return Padding(
+      key: ValueKey('conflict_warning_${session.sessionId}'),
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, size: 13, color: mac.orange),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              '동일 폴더 동시 작업',
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 11, color: mac.orange),
+            ),
+          ),
+          InkWell(
+            key: ValueKey('isolate_worktree_${session.sessionId}'),
+            onTap: onIsolate,
+            child: Text(
+              'worktree 분리',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+                color: mac.blue,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -461,14 +504,19 @@ class _WorktreeLinkView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = link.isMerged ? Colors.greenAccent : Colors.lightBlueAccent;
-    const nameStyle = TextStyle(fontSize: 10.5, fontFamily: 'monospace');
+    final mac = context.mac;
+    final color = link.isMerged ? mac.green : mac.blue;
+    final nameStyle = TextStyle(
+      fontSize: 10.5,
+      fontFamily: kMonoFont,
+      color: mac.label,
+    );
     return Container(
       key: ValueKey('worktree_link_${link.branch}'),
-      padding: const EdgeInsets.all(6),
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
       decoration: BoxDecoration(
+        color: mac.fill,
         borderRadius: BorderRadius.circular(6),
-        border: Border.all(color: color.withValues(alpha: 0.5)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -515,23 +563,22 @@ class _WorktreeLinkView extends StatelessWidget {
                 InkWell(
                   key: ValueKey('merge_worktree_${link.branch}'),
                   onTap: onMerge,
-                  child: const Padding(
+                  child: Padding(
                     padding: EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                     child: Text(
                       '병합',
                       style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.bold,
-                        decoration: TextDecoration.underline,
-                        color: Colors.lightBlueAccent,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: mac.blue,
                       ),
                     ),
                   ),
                 )
               else
-                const Text(
+                Text(
                   '미병합',
-                  style: TextStyle(fontSize: 10, color: Colors.amber),
+                  style: TextStyle(fontSize: 10, color: context.mac.orange),
                 ),
             ],
           ),
@@ -548,40 +595,32 @@ class _BackendUsageFooter extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final mac = context.mac;
+    final style = TextStyle(fontSize: 10.5, color: mac.secondaryLabel);
+    return Padding(
       key: const ValueKey('backend_usage_summary'),
-      padding: const EdgeInsets.all(10),
-      color: Colors.black26,
+      padding: const EdgeInsets.fromLTRB(14, 8, 14, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text(
-            '백엔드별 누적 사용량 / 비용',
-            style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 6),
           for (final b in BackendType.values)
             Padding(
-              padding: const EdgeInsets.only(bottom: 3),
+              padding: const EdgeInsets.only(bottom: 2),
               child: Row(
                 children: [
                   Expanded(
                     child: Text(
                       b.displayName,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 10.5,
-                        color: Colors.white70,
-                      ),
+                      style: style,
                     ),
                   ),
                   Text(
                     '${usageByBackend[b]?.totalTokens ?? 0} tok'
                     '${(usageByBackend[b]?.costUsd ?? 0) > 0 ? ' · \$${usageByBackend[b]!.costUsd.toStringAsFixed(4)}' : ''}',
-                    style: const TextStyle(
-                      fontSize: 10.5,
-                      fontFamily: 'monospace',
-                      color: Colors.greenAccent,
+                    style: style.copyWith(
+                      fontFamily: kMonoFont,
+                      fontFeatures: const [FontFeature.tabularFigures()],
                     ),
                   ),
                 ],

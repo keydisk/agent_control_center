@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/mac_theme.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/permission_center.dart';
@@ -46,7 +47,7 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
       builder: (ctx) => AlertDialog(
         title: Row(
           children: [
-            const Icon(Icons.dangerous, color: Colors.redAccent),
+            Icon(Icons.dangerous, color: context.mac.red),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -74,7 +75,7 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
           ),
           FilledButton(
             key: const ValueKey('confirm_auto_bypass_danger'),
-            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            style: FilledButton.styleFrom(backgroundColor: context.mac.red),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('위험을 감수하고 켜기'),
           ),
@@ -105,10 +106,10 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
               children: [
                 Text(
                   '요청 스코프: ${item.scopeName}',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
+                  style: TextStyle(
+                    fontFamily: kMonoFont,
                     fontSize: 12,
-                    color: Colors.amberAccent,
+                    color: context.mac.orange,
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -180,7 +181,7 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.admin_panel_settings_outlined, color: Colors.amber),
+          Icon(Icons.admin_panel_settings_outlined, color: context.mac.orange),
           const SizedBox(width: 8),
           const Expanded(
             child: Text('권한 센터 (Permission Center · 감사 로그 · 키체인 금고)'),
@@ -261,10 +262,10 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
 
   Widget _buildGrantedRulesTab(List<PermissionRule> rules) {
     if (rules.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           '현재 부여된 세션/항상 권한 규칙이 없습니다. 모든 도구 호출은 실행 전 사용자에게 묻습니다.',
-          style: TextStyle(color: Colors.white60),
+          style: TextStyle(color: context.mac.secondaryLabel),
         ),
       );
     }
@@ -297,10 +298,10 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
             trailing: OutlinedButton.icon(
               key: ValueKey('revoke_rule_${rule.id}'),
               onPressed: () => widget.permissionCenter.revokeRule(rule.id),
-              icon: const Icon(
+              icon: Icon(
                 Icons.delete_outline,
                 size: 16,
-                color: Colors.redAccent,
+                color: context.mac.red,
               ),
               label: const Text('철회'),
             ),
@@ -408,9 +409,9 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
                     IconButton(
                       key: ValueKey('revoke_acct_${acct.id}'),
                       tooltip: '철회 및 키체인 삭제',
-                      icon: const Icon(
+                      icon: Icon(
                         Icons.link_off,
-                        color: Colors.redAccent,
+                        color: context.mac.red,
                       ),
                       onPressed: () =>
                           widget.permissionCenter.setAccountScopePermission(
@@ -434,9 +435,9 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
           padding: const EdgeInsets.all(12),
           margin: const EdgeInsets.only(bottom: 12),
           decoration: BoxDecoration(
-            color: Colors.red.withValues(alpha: 0.14),
+            color: context.mac.red.withValues(alpha: 0.14),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.redAccent.withValues(alpha: 0.5)),
+            border: Border.all(color: context.mac.red.withValues(alpha: 0.5)),
           ),
           child: const Text(
             '보안 기본값: 모든 백엔드의 자체 자동 승인 모드(Claude Code의 권한 우회 옵션, Codex의 full-auto·무샌드박스 등)는 '
@@ -477,10 +478,10 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
 
   Widget _buildAuditLogsTab(List<PermissionAuditEntry> logs) {
     if (logs.isEmpty) {
-      return const Center(
+      return Center(
         child: Text(
           '기록된 권한 감사 로그가 없습니다.',
-          style: TextStyle(color: Colors.white60),
+          style: TextStyle(color: context.mac.secondaryLabel),
         ),
       );
     }
@@ -493,7 +494,7 @@ class _PermissionCenterDialogState extends State<PermissionCenterDialog>
           child: ListTile(
             leading: Icon(
               log.approved ? Icons.check_circle : Icons.cancel,
-              color: log.approved ? Colors.greenAccent : Colors.redAccent,
+              color: log.approved ? context.mac.green : context.mac.red,
             ),
             title: Row(
               children: [

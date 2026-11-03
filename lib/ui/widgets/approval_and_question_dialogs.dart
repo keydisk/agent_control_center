@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/mac_theme.dart';
 
 import '../../core/models/agent_models.dart';
 import 'timeline_widgets.dart';
@@ -29,7 +30,7 @@ class UnifiedApprovalDialog extends StatelessWidget {
             isDestructive
                 ? Icons.warning_amber_rounded
                 : Icons.verified_user_outlined,
-            color: isDestructive ? Colors.redAccent : Colors.amberAccent,
+            color: isDestructive ? context.mac.red : context.mac.orange,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -53,15 +54,15 @@ class UnifiedApprovalDialog extends StatelessWidget {
                   margin: const EdgeInsets.only(bottom: 12),
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.18),
+                    color: context.mac.red.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.redAccent),
+                    border: Border.all(color: context.mac.red),
                   ),
-                  child: const Text(
+                  child: Text(
                     '⚠️ 이 작업은 파일 삭제, 강제 푸시, 외부 발송 등 되돌릴 수 없는 변경을 포함하므로 "항상 허용"할 수 없으며 매번 확인합니다.',
                     style: TextStyle(
                       fontSize: 12.5,
-                      color: Colors.redAccent,
+                      color: context.mac.red,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -80,13 +81,13 @@ class UnifiedApprovalDialog extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: Colors.black26,
+                  color: context.mac.fill,
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(
                   request.formattedArguments,
                   style: const TextStyle(
-                    fontFamily: 'monospace',
+                    fontFamily: kMonoFont,
                     fontSize: 11.5,
                   ),
                 ),
@@ -106,7 +107,7 @@ class UnifiedApprovalDialog extends StatelessWidget {
               reason: '사용자가 권한 요청을 거부했습니다.',
             ),
           ),
-          child: const Text('거부', style: TextStyle(color: Colors.redAccent)),
+          child: Text('거부', style: TextStyle(color: context.mac.red)),
         ),
         OutlinedButton(
           key: const ValueKey('approval_btn_once'),
@@ -165,10 +166,10 @@ class _InfoRow extends StatelessWidget {
             width: 84,
             child: Text(
               '$label:',
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
-                color: Colors.white70,
+                color: context.mac.secondaryLabel,
               ),
             ),
           ),
@@ -240,7 +241,7 @@ class _AgentQuestionDialogState extends State<AgentQuestionDialog> {
     return AlertDialog(
       title: Row(
         children: [
-          const Icon(Icons.quiz_outlined, color: Colors.lightBlueAccent),
+          Icon(Icons.quiz_outlined, color: context.mac.blue),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
