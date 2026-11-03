@@ -22,14 +22,15 @@ enum BackendType {
     id: 'agy',
     displayName: 'Google Antigravity',
     executable: 'agy',
-    defaultModel: 'gemini-3.8-flash-high',
-    availableModels: [
-      'gemini-3.8-flash-high',
-      'gemini-3.8-flash-medium',
-      'gemini-3.8-flash-low',
-      'gemini-4-argon-medium',
-      'gemini-4-argon-high',
+    defaultModel: 'gemini-3.8-flash',
+    availableModels: ['gemini-3.8-flash', 'gemini-4-argon'],
+    supportedEfforts: [
+      ReasoningEffort.low,
+      ReasoningEffort.medium,
+      ReasoningEffort.high,
     ],
+    defaultEffort: ReasoningEffort.high,
+    effortInModelId: true,
     slashCommands: [
       '/help',
       '/skills',
@@ -105,6 +106,9 @@ enum BackendType {
     required this.slashCommands,
     required this.installCommand,
     required this.installGuide,
+    this.supportedEfforts = ReasoningEffort.values,
+    this.defaultEffort = ReasoningEffort.auto,
+    this.effortInModelId = false,
   });
 
   final String id;
@@ -115,6 +119,47 @@ enum BackendType {
   final List<String> slashCommands;
   final String installCommand;
   final String installGuide;
+  final List<ReasoningEffort> supportedEfforts;
+  final ReasoningEffort defaultEffort;
+
+  /// true면 CLI 모델 ID 끝에 강도를 붙입니다. 예: `gemini-3.8-flash-high`
+  final bool effortInModelId;
+
+  /// 강도 접미사를 뺀 모델 이름. 목록에 없는 모델은 그대로 둡니다.
+  String baseModel(String model) {
+    final suffix = _effortSuffixOf(model);
+    return suffix == null
+        ? model
+        : model.substring(0, model.length - suffix.name.length - 1);
+  }
+
+  /// 지원하지 않는 강도는 모델 ID의 접미사나 백엔드 기본값으로 바꿉니다.
+  ReasoningEffort resolveEffort(ReasoningEffort effort, String model) {
+    if (supportedEfforts.contains(effort)) return effort;
+    return _effortSuffixOf(model) ?? defaultEffort;
+  }
+
+  /// CLI `--model`에 넘길 ID. 강도가 모델 ID에 들어가는 백엔드만 조합합니다.
+  String cliModel(String model, ReasoningEffort effort) {
+    if (!effortInModelId) return model;
+    final base = baseModel(model);
+    if (!availableModels.contains(base)) return model;
+    return '$base-${resolveEffort(effort, model).name}';
+  }
+
+  ReasoningEffort? _effortSuffixOf(String model) {
+    if (!effortInModelId) return null;
+    for (final effort in supportedEfforts) {
+      final suffix = '-${effort.name}';
+      if (model.endsWith(suffix) &&
+          availableModels.contains(
+            model.substring(0, model.length - suffix.length),
+          )) {
+        return effort;
+      }
+    }
+    return null;
+  }
 
   static BackendType fromId(String id) {
     return BackendType.values.firstWhere(

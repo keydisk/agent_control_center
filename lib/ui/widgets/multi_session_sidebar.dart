@@ -385,9 +385,7 @@ class _SessionRow extends StatelessWidget {
                     padding: const EdgeInsets.only(left: 14),
                     child: BackendModelBadge(
                       backend: session.backendType,
-                      model: session.effort == ReasoningEffort.auto
-                          ? session.model
-                          : '${session.model} · ${session.effort.label}',
+                      model: session.modelLabel,
                     ),
                   ),
                   if (isSelected || isBusy)
