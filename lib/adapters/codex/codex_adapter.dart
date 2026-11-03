@@ -212,9 +212,7 @@ class CodexAdapter implements AgentBackend {
   }
 
   @override
-  Future<void> interrupt() async {
-    _process?.kill();
-  }
+  Future<void> interrupt() => _cleanupProcess();
 
   @override
   Future<void> resume(

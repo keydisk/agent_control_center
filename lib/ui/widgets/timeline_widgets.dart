@@ -1,17 +1,92 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
+
 import '../theme/mac_theme.dart';
+
 import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
 
+/// 현재 턴의 이벤트에서 에이전트가 지금 하는 일을 한 줄로 요약합니다.
+String describeAgentActivity(
+  List<AgentEvent> events, {
+  required bool awaitingApproval,
+}) {
+  if (awaitingApproval) return '승인 대기 중';
+  for (final event in events.reversed) {
+    if (event is DoneEvent) break;
+    if (event is ToolCallEvent && event.isRunning) {
+      return '${event.displayLine} 실행 중';
+    }
+  }
+  final last = events.lastOrNull;
+  return last is MessageEvent && last.role != 'user' && last.text.isNotEmpty
+      ? '응답 작성 중'
+      : '생각 중';
+}
+
+/// CLI 상태 줄처럼 현재 활동, 경과 시간, 중지 방법을 표시합니다.
+class AgentActivityBar extends StatefulWidget {
+  const AgentActivityBar({
+    super.key,
+    required this.activity,
+    required this.startedAt,
+  });
+
+  final String activity;
+  final DateTime startedAt;
+
+  @override
+  State<AgentActivityBar> createState() => _AgentActivityBarState();
+}
+
+class _AgentActivityBarState extends State<AgentActivityBar> {
+  static const _frames = ['✶', '✸', '✹', '✺', '✹', '✷'];
+  late final Timer _ticker;
+
+  @override
+  void initState() {
+    super.initState();
+    _ticker = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => setState(() {}),
+    );
+  }
+
+  @override
+  void dispose() {
+    _ticker.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final seconds = DateTime.now().difference(widget.startedAt).inSeconds;
+    final elapsed = seconds < 60
+        ? '${seconds}s'
+        : '${seconds ~/ 60}m ${(seconds % 60).toString().padLeft(2, '0')}s';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 2),
+      child: Text(
+        '${_frames[seconds % _frames.length]} ${widget.activity}… ($elapsed · Esc 중지)',
+        key: const ValueKey('agent_activity_bar'),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontFamily: kMonoFont,
+          fontSize: 12,
+          color: context.mac.orange,
+        ),
+      ),
+    );
+  }
+}
+
 /// 각 메시지/작업에 어떤 백엔드·모델이 처리했는지 표시하는 배지 위젯
 class BackendModelBadge extends StatelessWidget {
-  const BackendModelBadge({
-    super.key,
-    required this.backend,
-    this.model = '',
-  });
+  const BackendModelBadge({super.key, required this.backend, this.model = ''});
 
   final BackendType backend;
   final String model;
@@ -60,10 +135,7 @@ class BackendModelBadge extends StatelessWidget {
 
 /// 마크다운 및 코드블록 문법 하이라이트 렌더러
 class MarkdownMessageView extends StatelessWidget {
-  const MarkdownMessageView({
-    super.key,
-    required this.markdown,
-  });
+  const MarkdownMessageView({super.key, required this.markdown});
 
   final String markdown;
 
@@ -143,9 +215,7 @@ class _MarkdownParagraphBlock extends StatelessWidget {
     final lines = text.split('\n');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        for (final line in lines) _buildLine(context, line),
-      ],
+      children: [for (final line in lines) _buildLine(context, line)],
     );
   }
 
@@ -221,10 +291,7 @@ class _MarkdownParagraphBlock extends StatelessWidget {
 }
 
 class _CodeBlockHighlightedCard extends StatelessWidget {
-  const _CodeBlockHighlightedCard({
-    required this.language,
-    required this.code,
-  });
+  const _CodeBlockHighlightedCard({required this.language, required this.code});
 
   final String language;
   final String code;
@@ -265,11 +332,18 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.copy, size: 13, color: context.mac.secondaryLabel),
+                      Icon(
+                        Icons.copy,
+                        size: 13,
+                        color: context.mac.secondaryLabel,
+                      ),
                       SizedBox(width: 4),
                       Text(
                         '복사',
-                        style: TextStyle(fontSize: 11, color: context.mac.secondaryLabel),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: context.mac.secondaryLabel,
+                        ),
                       ),
                     ],
                   ),
@@ -307,10 +381,7 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
       spans.add(
         TextSpan(
           text: m.group(0),
-          style: TextStyle(
-            color: keywordColor,
-            fontWeight: FontWeight.w600,
-          ),
+          style: TextStyle(color: keywordColor, fontWeight: FontWeight.w600),
         ),
       );
       idx = m.end;
@@ -324,10 +395,7 @@ class _CodeBlockHighlightedCard extends StatelessWidget {
 
 /// 접히는 도구 호출 카드 (도구명, 인자, 결과, 소요 시간)
 class ToolCallCard extends StatelessWidget {
-  const ToolCallCard({
-    super.key,
-    required this.event,
-  });
+  const ToolCallCard({super.key, required this.event});
 
   final ToolCallEvent event;
 
@@ -360,10 +428,11 @@ class ToolCallCard extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '도구 호출: ${event.toolName}',
+                event.displayLine,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                  fontSize: 13,
+                  fontFamily: kMonoFont,
+                  fontSize: 12.5,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -378,10 +447,16 @@ class ToolCallCard extends StatelessWidget {
           ],
         ),
         subtitle: Text(
-          event.durationMs > 0
-              ? '소요 시간: ${event.durationMs}ms · ${event.isRunning ? "실행 중" : "완료"}'
-              : (event.isRunning ? '실행 중...' : '완료'),
-          style: const TextStyle(fontSize: 11.5),
+          event.isRunning
+              ? '실행 중...'
+              : '⎿ ${event.result.trim().isEmpty ? '완료' : event.result.trim()}',
+          maxLines: 3,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: kMonoFont,
+            fontSize: 11.5,
+            color: event.isError ? context.mac.red : null,
+          ),
         ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
@@ -429,10 +504,7 @@ class ToolCallCard extends StatelessWidget {
 
 /// 파일 변경 Diff 뷰어 카드
 class FileDiffViewerCard extends StatelessWidget {
-  const FileDiffViewerCard({
-    super.key,
-    required this.event,
-  });
+  const FileDiffViewerCard({super.key, required this.event});
 
   final FileDiffEvent event;
 
@@ -520,10 +592,7 @@ class FileDiffViewerCard extends StatelessWidget {
 
 /// 스킬 호출 표시 배너
 class SkillInvokedBanner extends StatelessWidget {
-  const SkillInvokedBanner({
-    super.key,
-    required this.event,
-  });
+  const SkillInvokedBanner({super.key, required this.event});
 
   final SkillInvokedEvent event;
 
@@ -539,11 +608,7 @@ class SkillInvokedBanner extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(
-            Icons.auto_awesome,
-            size: 16,
-            color: context.mac.purple,
-          ),
+          Icon(Icons.auto_awesome, size: 16, color: context.mac.purple),
           const SizedBox(width: 8),
           Expanded(
             child: Text(

@@ -4,18 +4,53 @@ import '../../core/models/agent_models.dart';
 
 /// Claude Code (`claude -p --output-format stream-json --verbose`) 이벤트 파서
 class ClaudeCodeEventParser {
-  ClaudeCodeEventParser({
-    required this.sessionId,
-    this.model = '',
-  });
+  ClaudeCodeEventParser({required this.sessionId, this.model = ''});
 
   final String sessionId;
   String model;
   String? remoteSessionId;
   int _counter = 0;
   final Map<String, ToolCallEvent> _inFlightTools = {};
+  String? _streamingMessageId;
+  final Set<String> _streamedMessageIds = {};
 
   String _nextId(String prefix) => '${prefix}_${sessionId}_${++_counter}';
+
+  /// `--include-partial-messages`의 토큰 단위 델타를 실시간 메시지로 변환합니다.
+  List<AgentEvent> _parseStreamEvent(Map event, String raw, DateTime now) {
+    final eventType = event['type'];
+    if (eventType == 'message_start' && event['message'] is Map) {
+      _streamingMessageId = (event['message'] as Map)['id']?.toString();
+      return const [];
+    }
+    final id = _streamingMessageId;
+    final delta = event['delta'];
+    if (eventType != 'content_block_delta' || delta is! Map || id == null) {
+      return const [];
+    }
+    final text = delta['type'] == 'text_delta'
+        ? (delta['text'] ?? '').toString()
+        : '';
+    final thinking = delta['type'] == 'thinking_delta'
+        ? (delta['thinking'] ?? '').toString()
+        : '';
+    if (text.isEmpty && thinking.isEmpty) return const [];
+    _streamedMessageIds.add(id);
+    return [
+      MessageEvent(
+        id: id,
+        sessionId: sessionId,
+        backend: BackendType.claudeCode,
+        model: model,
+        timestamp: now,
+        role: 'assistant',
+        text: text,
+        thinking: thinking,
+        isDelta: true,
+        rawLog: raw,
+      ),
+    ];
+  }
 
   List<AgentEvent> parseLine(String line) {
     final trimmed = line.trim();
@@ -33,6 +68,10 @@ class ClaudeCodeEventParser {
     final type = (json['type'] ?? '').toString();
     final now = DateTime.now();
     remoteSessionId = (json['session_id'] ?? remoteSessionId)?.toString();
+
+    if (type == 'stream_event' && json['event'] is Map) {
+      return _parseStreamEvent(json['event'] as Map, trimmed, now);
+    }
 
     if (type == 'system') {
       final subtype = (json['subtype'] ?? '').toString();
@@ -164,8 +203,8 @@ class ClaudeCodeEventParser {
 
             // Skill 호출 감지
             if (toolName == 'Skill') {
-              final skillName =
-                  (input['skill'] ?? input['name'] ?? 'skill').toString();
+              final skillName = (input['skill'] ?? input['name'] ?? 'skill')
+                  .toString();
               events.add(
                 SkillInvokedEvent(
                   id: _nextId('skill'),
@@ -229,8 +268,8 @@ class ClaudeCodeEventParser {
 
             // Edit / Write 도구면 FileDiffEvent 생성
             if (toolName == 'Edit' || toolName == 'Write') {
-              final filePath =
-                  (input['file_path'] ?? input['path'] ?? '').toString();
+              final filePath = (input['file_path'] ?? input['path'] ?? '')
+                  .toString();
               if (filePath.isNotEmpty) {
                 events.add(
                   FileDiffEvent(
@@ -254,7 +293,9 @@ class ClaudeCodeEventParser {
           }
         }
 
-        if (textBuffer.isNotEmpty || thinkingBuffer.isNotEmpty) {
+        // 델타로 이미 표시한 메시지는 최종본을 다시 추가하지 않습니다.
+        if ((textBuffer.isNotEmpty || thinkingBuffer.isNotEmpty) &&
+            !_streamedMessageIds.contains(msgId)) {
           events.insert(
             0,
             MessageEvent(
@@ -283,7 +324,13 @@ class ClaudeCodeEventParser {
           if (item is Map && item['type'] == 'tool_result') {
             final toolUseId = (item['tool_use_id'] ?? '').toString();
             final isErr = item['is_error'] == true;
-            final resContent = (item['content'] ?? '').toString();
+            final rawContent = item['content'];
+            final resContent = rawContent is List
+                ? rawContent
+                      .whereType<Map>()
+                      .map((block) => (block['text'] ?? '').toString())
+                      .join('\n')
+                : (rawContent ?? '').toString();
             final prev = _inFlightTools[toolUseId];
             if (prev != null) {
               final updated = prev.copyWith(

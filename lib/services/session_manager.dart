@@ -96,6 +96,7 @@ class ManagedSession {
   String? isolatedWorktreePath;
   String lastPrompt;
   List<String> lastAttachments;
+  DateTime? turnStartedAt;
   TokenUsage usage;
   final List<AgentEvent> events;
   final List<String> rawLogs;
@@ -564,6 +565,7 @@ class SessionManager extends ChangeNotifier {
             : shortTitle;
       }
       session.status = SessionStatus.running;
+      session.turnStartedAt = DateTime.now();
       _refreshAllConflictFlags();
 
       // 공통 스킬 라우팅 규칙 매칭 및 타임라인 표시
@@ -749,10 +751,44 @@ class SessionManager extends ChangeNotifier {
   Future<void> stopSession(String sessionId) async {
     final session = _sessions[sessionId];
     if (session == null) return;
+    final wasBusy =
+        session.status == SessionStatus.running ||
+        session.status == SessionStatus.awaitingApproval;
     await session.backend.interrupt();
+    // 프로세스가 종료되었으므로 다음 프롬프트는 같은 대화를 새 프로세스로 재개합니다.
+    session.conversationIdToResume ??= session.backend.remoteConversationId;
+    session.isStarted = false;
     session.status = SessionStatus.stopped;
+    if (wasBusy) _markTurnInterrupted(session);
     _refreshAllConflictFlags();
     notifyListeners();
+  }
+
+  /// 중지된 턴의 도구 카드와 대기 중인 요청이 실행 중으로 남지 않게 정리합니다.
+  void _markTurnInterrupted(ManagedSession session) {
+    for (final (i, event) in session.events.indexed) {
+      if (event is ToolCallEvent && event.isRunning) {
+        session.events[i] = event.copyWith(
+          isRunning: false,
+          isError: true,
+          result: '중지됨',
+        );
+      } else if (event is ApprovalRequestEvent) {
+        session.resolvedRequestIds.add(event.request.id);
+      } else if (event is QuestionEvent) {
+        session.resolvedRequestIds.add(event.request.id);
+      }
+    }
+    session.events.add(
+      DoneEvent(
+        id: 'stop_${DateTime.now().microsecondsSinceEpoch}',
+        sessionId: session.sessionId,
+        backend: session.backendType,
+        model: session.model,
+        timestamp: DateTime.now(),
+        stopReason: DoneEvent.interrupted,
+      ),
+    );
   }
 
   Future<void> retrySession(String sessionId) async {
