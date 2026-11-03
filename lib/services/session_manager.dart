@@ -9,6 +9,7 @@ import '../core/backend/backend_registry.dart';
 import '../core/models/agent_models.dart';
 import 'agent_orchestrator.dart';
 import 'effort_preference_store.dart';
+import 'model_preference_store.dart';
 import 'permission_center.dart';
 import 'session_context.dart';
 import 'skill_registry.dart';
@@ -163,6 +164,7 @@ class SessionManager extends ChangeNotifier {
     WorktreeAllocator? worktreeAllocator,
     this.trustedFolders,
     this.effortPreferences,
+    this.modelPreferences,
     this.groups,
     this.useHelperAgent = false,
     this.onChildWorktreeFinished,
@@ -194,6 +196,8 @@ class SessionManager extends ChangeNotifier {
 
   /// null이면 고른 추론 강도를 기억하지 않습니다.
   final EffortPreferenceStore? effortPreferences;
+
+  final ModelPreferenceStore? modelPreferences;
 
   /// null이면 작업 그룹을 쓰지 않습니다.
   final WorkspaceGroupStore? groups;
@@ -292,7 +296,10 @@ class SessionManager extends ChangeNotifier {
   }) {
     _counter++;
     final id = sessionId ?? 'session_$_counter';
-    final requestedModel = model ?? backendType.defaultModel;
+    final requestedModel =
+        model ??
+        modelPreferences?.modelFor(backendType) ??
+        backendType.defaultModel;
     final selectedModel = backendType.baseModel(requestedModel);
     final workDir = workingDirectory ?? Directory.current.path;
     final backend = backendOverride ?? _registry.create(backendType);
@@ -1329,7 +1336,7 @@ class SessionManager extends ChangeNotifier {
     final newSession = createSession(
       title: '${source.title} (${targetBackend.displayName})',
       backendType: targetBackend,
-      model: targetModel ?? targetBackend.defaultModel,
+      model: targetModel,
       effort: _inheritedEffort(source, targetBackend),
       workingDirectory: source.workingDirectory,
       makeActive: true,
@@ -1358,8 +1365,12 @@ class SessionManager extends ChangeNotifier {
     if (session == null) return;
     session.conversationIdToResume = null;
     session.backendType = backendType;
-    final requestedModel = model ?? backendType.defaultModel;
+    final requestedModel =
+        model ??
+        modelPreferences?.modelFor(backendType) ??
+        backendType.defaultModel;
     session.model = backendType.baseModel(requestedModel);
+    if (model != null) modelPreferences?.remember(backendType, model);
     session.effort = backendType.resolveEffort(
       effortPreferences?.effortFor(backendType) ?? backendType.defaultEffort,
       requestedModel,
@@ -1387,6 +1398,7 @@ class SessionManager extends ChangeNotifier {
     final session = _sessions[sessionId];
     if (session == null) return;
     final base = session.backendType.baseModel(model);
+    modelPreferences?.remember(session.backendType, base);
     if (session.model == base) return;
     session.conversationIdToResume ??= session.backend.remoteConversationId;
     session.isStarted = false;
