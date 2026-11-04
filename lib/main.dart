@@ -229,6 +229,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
 
     _deepLinkSub = _notificationService.deepLinks.listen(_handleDeepLink);
 
+    _sessionManager.restoreSavedSessions();
     if (_sessionManager.sessions.isEmpty) {
       _sessionManager.createSession(
         sessionId: 'session_1',
@@ -402,25 +403,6 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     if (previous != null) {
       _sessionManager.continueFromSnapshot(session.sessionId, previous);
     }
-  }
-
-  Future<void> _openSavedSession(
-    SessionSnapshot snapshot,
-    String? groupId,
-  ) async {
-    final session = _sessionManager.createSession(
-      title: snapshot.title,
-      backendType: snapshot.backend,
-      model: snapshot.model.isEmpty ? null : snapshot.model,
-      effort: snapshot.effort,
-      workingDirectory: snapshot.workingDirectory.isEmpty
-          ? Directory.current.path
-          : snapshot.workingDirectory,
-      groupId: groupId,
-      instructions: snapshot.instructions,
-      permissionMode: snapshot.permissionMode,
-    );
-    await _sessionManager.reopenSnapshot(session.sessionId, snapshot);
   }
 
   Future<void> _openChildSessionDialog(String parentSessionId) async {
@@ -750,17 +732,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         if (_showSessionSidebar)
           MultiSessionSidebar(
             sessions: _sessionManager.sessions,
-            savedSessions: _sessionManager.orderedSavedSessions
-                .where(
-                  (snapshot) => !_sessionManager.sessions.any(
-                    (session) => session.snapshotId == snapshot.id,
-                  ),
-                )
-                .toList(),
-            onOpenSavedSession: _openSavedSession,
             canMoveSession: _sessionManager.canMoveSession,
             onMoveSession: _sessionManager.moveSession,
-            onMoveSavedSession: _sessionManager.moveSavedSession,
             activeSessionId: _sessionManager.activeSessionId,
             usageByBackend: _sessionManager.usageByBackend,
             onSelectSession: _sessionManager.selectSession,

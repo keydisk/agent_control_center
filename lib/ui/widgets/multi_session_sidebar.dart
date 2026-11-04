@@ -1,7 +1,6 @@
 import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
 
 import '../theme/mac_theme.dart';
 
@@ -10,9 +9,6 @@ import '../../services/session_manager.dart';
 import '../../services/workspace_group_store.dart';
 import 'mac_window_drag_area.dart';
 import 'timeline_widgets.dart';
-
-/// 드래그 중인 항목. 열린 세션은 세션 id, 저장된 기록은 기록 id를 담습니다.
-typedef _SessionDrag = ({String id, bool saved});
 
 /// [targetId]가 있으면 그 항목의 앞이나 뒤, 없으면 [groupId]의 맨 끝으로 옮깁니다.
 typedef SessionMoveCallback =
@@ -35,8 +31,6 @@ class MultiSessionSidebar extends StatelessWidget {
     required this.onRetrySession,
     required this.onRerunWithBackend,
     required this.onIsolateWorktree,
-    this.savedSessions = const [],
-    this.onOpenSavedSession,
     this.selectedDevice = TargetDeviceType.macosDesktop,
     this.onDeviceChanged,
     this.autoOrchestrateByAntigravity = true,
@@ -56,7 +50,6 @@ class MultiSessionSidebar extends StatelessWidget {
     this.onGroupCollapsedChanged,
     this.canMoveSession,
     this.onMoveSession,
-    this.onMoveSavedSession,
   });
 
   final List<ManagedSession> sessions;
@@ -70,9 +63,6 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<String> onRetrySession;
   final void Function(String sessionId, BackendType backend) onRerunWithBackend;
   final ValueChanged<String> onIsolateWorktree;
-  final List<SessionSnapshot> savedSessions;
-  final void Function(SessionSnapshot snapshot, String? groupId)?
-  onOpenSavedSession;
   final TargetDeviceType selectedDevice;
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
   final bool autoOrchestrateByAntigravity;
@@ -95,20 +85,17 @@ class MultiSessionSidebar extends StatelessWidget {
   final bool Function(String sessionId, String? groupId, {String? targetId})?
   canMoveSession;
   final SessionMoveCallback? onMoveSession;
-  final SessionMoveCallback? onMoveSavedSession;
 
-  bool _canDrop(_SessionDrag drag, String? groupId, [String? targetId]) =>
-      drag.saved
-      ? onMoveSavedSession != null && drag.id != targetId
-      : canMoveSession?.call(drag.id, groupId, targetId: targetId) ?? false;
+  bool _canDrop(String drag, String? groupId, [String? targetId]) =>
+      canMoveSession?.call(drag, groupId, targetId: targetId) ?? false;
 
   void _drop(
-    _SessionDrag drag,
+    String drag,
     String? groupId, {
     String? targetId,
     bool after = false,
-  }) => (drag.saved ? onMoveSavedSession : onMoveSession)?.call(
-    drag.id,
+  }) => onMoveSession?.call(
+    drag,
     groupId,
     targetId: targetId,
     after: after,
@@ -140,7 +127,7 @@ class MultiSessionSidebar extends StatelessWidget {
     for (final (session, depth) in _flattenTree(sessions))
       _MovableRow(
         key: ValueKey('movable_session_${session.sessionId}'),
-        drag: (id: session.sessionId, saved: false),
+        drag: session.sessionId,
         title: session.title,
         canAccept: (drag) => _canDrop(drag, groupId, session.sessionId),
         onDrop: (drag, after) => _drop(
@@ -165,47 +152,6 @@ class MultiSessionSidebar extends StatelessWidget {
           onDelete: () => onDeleteSession?.call(session.sessionId),
         ),
       ),
-  ];
-
-  /// 저장된 그룹을 따르고, 그룹을 기록하기 전의 예전 기록은 같은 폴더의 그룹에 넣습니다.
-  String? _groupIdOf(SessionSnapshot snapshot) {
-    final all = groups ?? const <WorkspaceGroup>[];
-    if (snapshot.groupId == SessionSnapshot.noGroup) return null;
-    if (all.any((g) => g.id == snapshot.groupId)) return snapshot.groupId;
-    for (final group in all) {
-      if (p.equals(group.folder, snapshot.workingDirectory)) return group.id;
-    }
-    return null;
-  }
-
-  List<Widget> _savedRows(String? groupId) => [
-    for (final snapshot in savedSessions)
-      if (_groupIdOf(snapshot) == groupId)
-        _MovableRow(
-          key: ValueKey('movable_saved_${snapshot.id}'),
-          drag: (id: snapshot.id, saved: true),
-          title: snapshot.title,
-          canAccept: (drag) => _canDrop(drag, groupId, snapshot.id),
-          onDrop: (drag, after) =>
-              _drop(drag, groupId, targetId: snapshot.id, after: after),
-          child: ListTile(
-            key: ValueKey('saved_session_${snapshot.id}'),
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            leading: const Icon(Icons.history, size: 16),
-            title: Text(
-              snapshot.title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            subtitle: Text(
-              snapshot.backend.displayName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            onTap: () => onOpenSavedSession?.call(snapshot, groupId),
-          ),
-        ),
   ];
 
   @override
@@ -259,7 +205,6 @@ class MultiSessionSidebar extends StatelessWidget {
                           sessions.where((s) => s.groupId == group.id).toList(),
                           group.id,
                         ),
-                        ..._savedRows(group.id),
                       ],
                     ),
                   const SizedBox(height: 8),
@@ -276,7 +221,6 @@ class MultiSessionSidebar extends StatelessWidget {
                       .toList(),
                   null,
                 ),
-                ..._savedRows(null),
               ],
             ),
           ),
@@ -373,10 +317,10 @@ class _MovableRow extends StatefulWidget {
     required this.child,
   });
 
-  final _SessionDrag drag;
+  final String drag;
   final String title;
-  final bool Function(_SessionDrag drag) canAccept;
-  final void Function(_SessionDrag drag, bool after) onDrop;
+  final bool Function(String drag) canAccept;
+  final void Function(String drag, bool after) onDrop;
   final Widget child;
 
   @override
@@ -386,7 +330,7 @@ class _MovableRow extends StatefulWidget {
 class _MovableRowState extends State<_MovableRow> {
   bool _after = false;
 
-  void _trackPointer(DragTargetDetails<_SessionDrag> details) {
+  void _trackPointer(DragTargetDetails<String> details) {
     final box = context.findRenderObject()! as RenderBox;
     final after = box.globalToLocal(details.offset).dy > box.size.height / 2;
     if (after != _after) setState(() => _after = after);
@@ -396,7 +340,7 @@ class _MovableRowState extends State<_MovableRow> {
   Widget build(BuildContext context) {
     final mac = context.mac;
     final edge = BorderSide(color: mac.blue, width: 2);
-    return DragTarget<_SessionDrag>(
+    return DragTarget<String>(
       onWillAcceptWithDetails: (details) => widget.canAccept(details.data),
       onMove: _trackPointer,
       onAcceptWithDetails: (details) => widget.onDrop(details.data, _after),
@@ -410,7 +354,7 @@ class _MovableRowState extends State<_MovableRow> {
                   bottom: _after ? edge : BorderSide.none,
                 ),
         ),
-        child: Draggable<_SessionDrag>(
+        child: Draggable<String>(
           data: widget.drag,
           // 앞뒤 판정이 포인터 위치를 기준으로 하도록 맞춥니다.
           dragAnchorStrategy: pointerDragAnchorStrategy,
@@ -446,13 +390,13 @@ class _SectionDropZone extends StatelessWidget {
     required this.child,
   });
 
-  final bool Function(_SessionDrag drag) canAccept;
-  final ValueChanged<_SessionDrag> onDrop;
+  final bool Function(String drag) canAccept;
+  final ValueChanged<String> onDrop;
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    return DragTarget<_SessionDrag>(
+    return DragTarget<String>(
       onWillAcceptWithDetails: (details) => canAccept(details.data),
       onAcceptWithDetails: (details) => onDrop(details.data),
       builder: (context, candidates, _) => DecoratedBox(
@@ -510,8 +454,8 @@ class _GroupTile extends StatelessWidget {
   final VoidCallback onNewSession;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
-  final bool Function(_SessionDrag drag) canAcceptDrop;
-  final ValueChanged<_SessionDrag> onDrop;
+  final bool Function(String drag) canAcceptDrop;
+  final ValueChanged<String> onDrop;
   final List<Widget> children;
 
   Future<void> _showContextMenu(BuildContext context, Offset position) async {
