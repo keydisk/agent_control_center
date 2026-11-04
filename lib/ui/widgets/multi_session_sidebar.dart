@@ -1068,7 +1068,7 @@ class _BackendUsageFooter extends StatelessWidget {
                           ? 0
                           : (usageByBackend[b]?.totalTokens ?? 0) / maxTokens,
                       minHeight: 4,
-                      color: mac.blue,
+                      color: mac.backendColor(b),
                       backgroundColor: mac.fill,
                       semanticsLabel:
                           '${b.displayName} 토큰 사용량 '

@@ -87,6 +87,7 @@ class KvCachePanel extends StatelessWidget {
       String label,
       String value, {
       required double fraction,
+      required Color color,
       Key? barKey,
       Key? valueKey,
       String? semanticsLabel,
@@ -103,7 +104,7 @@ class KvCachePanel extends StatelessWidget {
               key: barKey,
               value: fraction.clamp(0.0, 1.0),
               minHeight: minHeight,
-              color: mac.blue,
+              color: color,
               backgroundColor: mac.fill,
               semanticsLabel: semanticsLabel ?? '$label $value',
             ),
@@ -151,7 +152,7 @@ class KvCachePanel extends StatelessWidget {
                                 ? 0
                                 : usage.totalTokens / maxTokens,
                             minHeight: 6,
-                            color: mac.blue,
+                            color: mac.backendColor(backend),
                             backgroundColor: mac.fill,
                             semanticsLabel:
                                 '${backend.displayName} 토큰 사용량 '
@@ -209,6 +210,7 @@ class KvCachePanel extends StatelessWidget {
                   backend.displayName,
                   _percent(usage),
                   fraction: usage.cacheHitRate,
+                  color: mac.backendColor(backend),
                   barKey: ValueKey('kv_cache_bar_${backend.id}'),
                   minHeight: 4,
                 );
@@ -245,6 +247,9 @@ class KvCachePanel extends StatelessWidget {
                 '5시간',
                 _window(usage.fiveHour),
                 fraction: (usage.fiveHour?.usedPercent ?? 0) / 100,
+                color: mac.usageLevelColor(
+                  (usage.fiveHour?.usedPercent ?? 0) / 100,
+                ),
                 barKey: ValueKey(
                   'provider_five_hour_bar_${backend.id}_${usage.name}',
                 ),
@@ -253,6 +258,9 @@ class KvCachePanel extends StatelessWidget {
                 '일주일',
                 _window(usage.weekly),
                 fraction: (usage.weekly?.usedPercent ?? 0) / 100,
+                color: mac.usageLevelColor(
+                  (usage.weekly?.usedPercent ?? 0) / 100,
+                ),
                 barKey: ValueKey(
                   'provider_weekly_bar_${backend.id}_${usage.name}',
                 ),
@@ -261,6 +269,7 @@ class KvCachePanel extends StatelessWidget {
                 '최근 컨텍스트',
                 _contextLabel(usage),
                 fraction: usage.contextFraction,
+                color: mac.usageLevelColor(usage.contextFraction),
                 barKey: ValueKey(
                   'provider_context_bar_${backend.id}_${usage.name}',
                 ),
@@ -272,6 +281,7 @@ class KvCachePanel extends StatelessWidget {
                 '사용량 정보 없음',
                 '0%',
                 fraction: 0,
+                color: mac.green,
                 barKey: ValueKey('provider_empty_bar_${backend.id}'),
               ),
             const SizedBox(height: 8),

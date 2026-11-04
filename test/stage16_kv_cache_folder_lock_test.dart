@@ -14,6 +14,7 @@ import 'package:agent_control_center/services/provider_usage_service.dart';
 import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/trusted_folder_store.dart';
 import 'package:agent_control_center/services/workspace_group_store.dart';
+import 'package:agent_control_center/ui/theme/mac_theme.dart';
 import 'package:agent_control_center/ui/widgets/kv_cache_panel.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -331,6 +332,27 @@ void main() {
         closeTo(0.25, 0.001),
       );
       expect(find.text('32000/128000 tok'), findsOneWidget);
+
+      // 백엔드 그래프는 백엔드별 고유색, 한도 그래프는 소진율 상태색입니다.
+      const mac = MacColors.light;
+      expect(
+        barByKey('kv_cache_bar_claude').color,
+        mac.backendColor(BackendType.claudeCode),
+      );
+      expect(
+        barByKey('kv_cache_bar_codex').color,
+        mac.backendColor(BackendType.codex),
+      );
+      expect(
+        barByKey('provider_five_hour_bar_agy_Google Antigravity').color,
+        mac.green,
+      );
+      expect(mac.backendPalette.length, BackendType.values.length);
+      expect(mac.backendPalette.toSet().length, BackendType.values.length);
+      expect(mac.usageLevelColor(0.49), mac.green);
+      expect(mac.usageLevelColor(0.5), mac.orange);
+      expect(mac.usageLevelColor(0.79), mac.orange);
+      expect(mac.usageLevelColor(0.8), mac.red);
     });
 
     testWidgets('낮고 좁은 창에서도 사이드바가 넘치지 않는다', (tester) async {
