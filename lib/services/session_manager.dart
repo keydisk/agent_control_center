@@ -518,6 +518,13 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 저장된 기록을 새 세션으로 옮겨, 같은 작업이 목록에 두 번 남지 않게 합니다.
+  Future<void> reopenSnapshot(String sessionId, SessionSnapshot snapshot) async {
+    await loadSnapshot(sessionId, snapshot);
+    _historyStore.removeSnapshot(snapshot.id);
+    notifyListeners();
+  }
+
   /// 저장된 세션을 키워드로 검색합니다. 키워드가 비어 있으면 최근 날짜순으로 상위 [limit]개(기본 10개)를 반환합니다.
   List<SessionSnapshot> searchSavedSessions([
     String query = '',
