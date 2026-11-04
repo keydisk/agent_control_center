@@ -56,6 +56,49 @@ class WorkspaceGroup {
   };
 }
 
+/// 세션이 작업한 브랜치와 병합 대상 브랜치의 연결 기록
+class WorktreeLink {
+  const WorktreeLink({
+    required this.baseBranch,
+    required this.branch,
+    required this.worktreeRoot,
+    required this.startCommit,
+    this.mergeCommit,
+  });
+
+  factory WorktreeLink.fromJson(Map<String, dynamic> json) => WorktreeLink(
+    baseBranch: json['baseBranch'] as String,
+    branch: json['branch'] as String,
+    worktreeRoot: json['worktreeRoot'] as String,
+    startCommit: json['startCommit'] as String,
+    mergeCommit: json['mergeCommit'] as String?,
+  );
+
+  final String baseBranch;
+  final String branch;
+  final String worktreeRoot;
+  final String startCommit;
+  final String? mergeCommit;
+
+  bool get isMerged => mergeCommit != null;
+
+  WorktreeLink merged(String commit) => WorktreeLink(
+    baseBranch: baseBranch,
+    branch: branch,
+    worktreeRoot: worktreeRoot,
+    startCommit: startCommit,
+    mergeCommit: commit,
+  );
+
+  Map<String, dynamic> toJson() => {
+    'baseBranch': baseBranch,
+    'branch': branch,
+    'worktreeRoot': worktreeRoot,
+    'startCommit': startCommit,
+    if (mergeCommit != null) 'mergeCommit': mergeCommit,
+  };
+}
+
 /// 앱을 다시 켠 뒤에도 이어갈 수 있도록 남기는 세션의 작업 기록
 class SessionSnapshot {
   /// 그룹 밖에 둔 기록의 [groupId]입니다. null은 그룹을 기록하기 전의 예전 기록을 뜻합니다.
@@ -75,6 +118,9 @@ class SessionSnapshot {
     this.groupId,
     this.instructions = '',
     this.permissionMode,
+    this.parentSessionId,
+    this.worktreePath,
+    this.worktreeLinks = const [],
   });
 
   factory SessionSnapshot.fromJson(Map<String, dynamic> json) {
@@ -101,6 +147,12 @@ class SessionSnapshot {
       groupId: json['groupId'] as String?,
       instructions: (json['instructions'] ?? '') as String,
       permissionMode: _restorablePermissionMode(json['permissionMode']),
+      parentSessionId: json['parentSessionId'] as String?,
+      worktreePath: json['worktreePath'] as String?,
+      worktreeLinks: [
+        for (final link in (json['worktreeLinks'] ?? const []) as List)
+          WorktreeLink.fromJson(Map<String, dynamic>.from(link as Map)),
+      ],
     );
   }
 
@@ -123,6 +175,9 @@ class SessionSnapshot {
   final String? groupId;
   final String instructions;
   final PermissionMode? permissionMode;
+  final String? parentSessionId;
+  final String? worktreePath;
+  final List<WorktreeLink> worktreeLinks;
 
   String get searchableText {
     final buffer = StringBuffer()
@@ -206,6 +261,10 @@ class SessionSnapshot {
     if (instructions.isNotEmpty) 'instructions': instructions,
     if (permissionMode != null && permissionMode != PermissionMode.bypass)
       'permissionMode': permissionMode!.name,
+    if (parentSessionId != null) 'parentSessionId': parentSessionId,
+    if (worktreePath != null) 'worktreePath': worktreePath,
+    if (worktreeLinks.isNotEmpty)
+      'worktreeLinks': [for (final link in worktreeLinks) link.toJson()],
   };
 }
 
@@ -309,35 +368,6 @@ class WorkspaceGroupStore {
         if (!first.contains(s.id)) s.id,
     ];
     _saveHistory();
-  }
-
-  /// 저장된 기록을 다른 그룹이나 [targetId] 앞뒤로 옮깁니다.
-  void moveSnapshot(
-    String snapshotId,
-    String? groupId, {
-    String? targetId,
-    bool after = false,
-  }) {
-    final ordered = orderedSessions();
-    final snapshot = ordered.where((s) => s.id == snapshotId).firstOrNull;
-    if (snapshot == null) return;
-    final ids = [
-      for (final s in ordered)
-        if (s.id != snapshotId) s.id,
-    ];
-    final target = ids.indexOf(targetId ?? '');
-    ids.insert(target < 0 ? ids.length : target + (after ? 1 : 0), snapshotId);
-    _sessionOrder = ids;
-    final folder = _groups[groupId]?.folder ?? snapshot.workingDirectory;
-    recordSession(
-      SessionSnapshot.fromJson({
-        ...snapshot.toJson(),
-        'groupId': groupId ?? SessionSnapshot.noGroup,
-        'workingDirectory': folder,
-        // 대화는 폴더에 묶여 있어 폴더가 바뀌면 이어갈 수 없습니다.
-        if (folder != snapshot.workingDirectory) 'conversationId': null,
-      }),
-    );
   }
 
   void _upsertSavedSession(SessionSnapshot snapshot) {

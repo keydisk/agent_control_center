@@ -6,6 +6,7 @@ import 'package:agent_control_center/core/backend/agent_backend.dart';
 import 'package:agent_control_center/core/models/agent_models.dart';
 import 'package:agent_control_center/services/session_manager.dart';
 import 'package:agent_control_center/services/trusted_folder_store.dart';
+import 'package:agent_control_center/services/workspace_group_store.dart';
 import 'package:agent_control_center/ui/screens/trusted_folders_screen.dart';
 import 'package:agent_control_center/ui/widgets/multi_session_sidebar.dart';
 import 'package:flutter/material.dart';

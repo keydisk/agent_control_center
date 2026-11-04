@@ -38,33 +38,6 @@ typedef WorktreeLinkResolver = Future<WorktreeLink?> Function(
   String worktreePath,
 );
 
-/// 세션이 작업한 브랜치와 병합 대상 브랜치의 연결 기록
-class WorktreeLink {
-  const WorktreeLink({
-    required this.baseBranch,
-    required this.branch,
-    required this.worktreeRoot,
-    required this.startCommit,
-    this.mergeCommit,
-  });
-
-  final String baseBranch;
-  final String branch;
-  final String worktreeRoot;
-  final String startCommit;
-  final String? mergeCommit;
-
-  bool get isMerged => mergeCommit != null;
-
-  WorktreeLink merged(String commit) => WorktreeLink(
-    baseBranch: baseBranch,
-    branch: branch,
-    worktreeRoot: worktreeRoot,
-    startCommit: startCommit,
-    mergeCommit: commit,
-  );
-}
-
 class ManagedSession {
   ManagedSession({
     required this.sessionId,
@@ -88,6 +61,7 @@ class ManagedSession {
     this.usage = const TokenUsage(),
     List<AgentEvent>? events,
     List<String>? rawLogs,
+    this._snapshotId,
   }) : events = events ?? [],
        rawLogs = rawLogs ?? [],
        createdAt = DateTime.now();
@@ -114,6 +88,9 @@ class ManagedSession {
   /// 이전·상위 세션에서 압축해 가져온 컨텍스트
   String handoffContext = '';
   Future<void>? handoffReady;
+
+  /// 저장된 작업을 되살렸고 아직 대화 컨텍스트를 준비하지 않았으면 true입니다.
+  bool needsRestoredContext = false;
   SessionStatus status;
   bool isStarted;
   String? conversationIdToResume;
@@ -142,7 +119,10 @@ class ManagedSession {
   StreamSubscription<String>? logSub;
 
   /// 세션 번호는 앱을 다시 켜면 반복되므로 생성 시각을 더해 구분합니다.
-  String get snapshotId => '$sessionId@${createdAt.microsecondsSinceEpoch}';
+  /// 되살린 작업은 저장된 기록을 계속 이어 쓰도록 처음 id를 유지합니다.
+  String get snapshotId =>
+      _snapshotId ?? '$sessionId@${createdAt.microsecondsSinceEpoch}';
+  final String? _snapshotId;
 
   /// 사용자가 처리해야 하는 하위 worktree 작업 수
   int get childAttentionCount => events
@@ -304,8 +284,13 @@ class SessionManager extends ChangeNotifier {
     String handoffTranscript = '',
     String handoffLabel = '',
     PermissionMode? permissionMode,
+    String? snapshotId,
   }) {
     _counter++;
+    // 되살린 작업이 쓰는 번호는 건너뜁니다.
+    while (sessionId == null && _sessions.containsKey('session_$_counter')) {
+      _counter++;
+    }
     final id = sessionId ?? 'session_$_counter';
     final requestedModel =
         model ??
@@ -337,6 +322,7 @@ class SessionManager extends ChangeNotifier {
       hasDirectoryConflict: conflicts.isNotEmpty,
       events: initialEvents != null ? List.of(initialEvents) : null,
       rawLogs: initialRawLogs != null ? List.of(initialRawLogs) : null,
+      snapshotId: snapshotId,
     );
 
     _bindSessionStreams(session);
@@ -518,11 +504,57 @@ class SessionManager extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 저장된 기록을 새 세션으로 옮겨, 같은 작업이 목록에 두 번 남지 않게 합니다.
-  Future<void> reopenSnapshot(String sessionId, SessionSnapshot snapshot) async {
-    await loadSnapshot(sessionId, snapshot);
-    _historyStore.removeSnapshot(snapshot.id);
+  /// 저장된 작업을 세션으로 되살립니다. 작업 수만큼 컨텍스트를 압축하지 않도록
+  /// 컨텍스트는 실제로 이어갈 때 준비합니다.
+  void restoreSavedSessions() {
+    final live = {for (final s in _sessions.values) s.snapshotId};
+    for (final snapshot in _historyStore.orderedSessions()) {
+      if (live.contains(snapshot.id)) continue;
+      // 하위 세션 관계와 하위 작업 알림이 이어지도록 예전 세션 id를 그대로 씁니다.
+      final previousId = snapshot.id.split('@').first;
+      final sessionId = _sessions.containsKey(previousId)
+          ? snapshot.id
+          : previousId;
+      final session = createSession(
+        sessionId: sessionId,
+        snapshotId: snapshot.id,
+        title: snapshot.title,
+        backendType: snapshot.backend,
+        model: snapshot.model.isEmpty ? null : snapshot.model,
+        effort: snapshot.effort,
+        workingDirectory: snapshot.workingDirectory.isEmpty
+            ? Directory.current.path
+            : snapshot.workingDirectory,
+        groupId: _restoredGroupId(snapshot),
+        parentSessionId: snapshot.parentSessionId,
+        instructions: snapshot.instructions,
+        permissionMode: snapshot.permissionMode,
+        makeActive: false,
+      );
+      final worktree = snapshot.worktreePath;
+      final worktreeGone = worktree != null && !Directory(worktree).existsSync();
+      session
+        ..isolatedWorktreePath = worktreeGone ? null : worktree
+        // 대화는 폴더에 묶여 있어 worktree가 사라지면 이어갈 수 없습니다.
+        ..conversationIdToResume = worktreeGone ? null : snapshot.conversationId
+        ..needsRestoredContext = true
+        ..worktreeLinks.addAll(snapshot.worktreeLinks)
+        ..events.addAll(snapshot.restoredEvents(sessionId: sessionId));
+    }
     notifyListeners();
+  }
+
+  /// 저장된 그룹을 따르고, 그룹을 기록하기 전의 예전 작업은 같은 폴더의 그룹에 넣습니다.
+  String? _restoredGroupId(SessionSnapshot snapshot) {
+    final store = groups;
+    if (store == null || snapshot.groupId == SessionSnapshot.noGroup) {
+      return null;
+    }
+    if (store.groupById(snapshot.groupId) != null) return snapshot.groupId;
+    for (final group in store.groups) {
+      if (p.equals(group.folder, snapshot.workingDirectory)) return group.id;
+    }
+    return null;
   }
 
   /// 저장된 세션을 키워드로 검색합니다. 키워드가 비어 있으면 최근 날짜순으로 상위 [limit]개(기본 10개)를 반환합니다.
@@ -617,6 +649,8 @@ class SessionManager extends ChangeNotifier {
       if (folder != null) _moveToDirectory(moved, folder);
       _recordSnapshot(moved);
     }
+    // 그룹이 그대로여도 상위 세션이 바뀌었을 수 있습니다.
+    _recordSnapshot(session);
     final ordered = [..._sessions.values]..remove(session);
     ordered.insert(
       target == null
@@ -630,24 +664,6 @@ class SessionManager extends ChangeNotifier {
     _historyStore.putFirstInOrder([for (final s in ordered) s.snapshotId]);
     notifyListeners();
   }
-
-  void moveSavedSession(
-    String snapshotId,
-    String? groupId, {
-    String? targetId,
-    bool after = false,
-  }) {
-    _historyStore.moveSnapshot(
-      snapshotId,
-      groupId,
-      targetId: targetId,
-      after: after,
-    );
-    notifyListeners();
-  }
-
-  List<SessionSnapshot> get orderedSavedSessions =>
-      _historyStore.orderedSessions();
 
   /// 그룹을 지워도 세션은 그룹 없는 세션으로 남습니다.
   void deleteGroup(String groupId) {
@@ -697,6 +713,9 @@ class SessionManager extends ChangeNotifier {
         groupId: session.groupId ?? SessionSnapshot.noGroup,
         instructions: session.instructions,
         permissionMode: session.permissionMode,
+        parentSessionId: session.parentSessionId,
+        worktreePath: session.isolatedWorktreePath,
+        worktreeLinks: List.of(session.worktreeLinks),
       ),
     );
   }
@@ -1036,6 +1055,7 @@ class SessionManager extends ChangeNotifier {
     if (link != null) session.worktreeLinks.add(link);
     session.hasDirectoryConflict = false;
     _refreshAllConflictFlags();
+    _recordSnapshot(session);
     notifyListeners();
     return worktreePath;
   }
@@ -1133,6 +1153,7 @@ class SessionManager extends ChangeNotifier {
       session.conversationIdToResume = null;
     }
     _refreshAllConflictFlags();
+    _recordSnapshot(session);
     notifyListeners();
   }
 
@@ -1160,12 +1181,14 @@ class SessionManager extends ChangeNotifier {
     }
     _historyStore.removeSnapshot(session.snapshotId);
     for (final other in _sessions.values) {
-      if (other.parentSessionId == sessionId) {
-        other.parentSessionId = session.parentSessionId;
-      }
+      final orphaned = other.parentSessionId == sessionId;
+      if (orphaned) other.parentSessionId = session.parentSessionId;
+      final eventCount = other.events.length;
       other.events.removeWhere(
         (e) => e is ChildWorktreeEvent && e.childSessionId == sessionId,
       );
+      // 다음 실행에 지운 하위 작업의 알림이 되살아나지 않게 합니다.
+      if (orphaned || other.events.length != eventCount) _recordSnapshot(other);
     }
     _refreshAllConflictFlags();
     notifyListeners();
@@ -1348,6 +1371,16 @@ class SessionManager extends ChangeNotifier {
       }
       notifyListeners();
 
+      // 이어갈 대화가 있으면 백엔드가 맥락을 갖고 있어 다시 넘기지 않습니다.
+      if (session.needsRestoredContext &&
+          session.conversationIdToResume == null) {
+        session.handoffReady = _prepareHandoff(
+          session,
+          buildSessionTranscript(session.events),
+          '이전 작업 "${session.title}"',
+        );
+      }
+      session.needsRestoredContext = false;
       await session.handoffReady;
       // 컨텍스트를 압축하는 동안 사용자가 중지했을 수 있습니다.
       if (session.status != SessionStatus.running) return;

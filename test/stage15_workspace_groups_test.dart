@@ -15,6 +15,7 @@ import 'package:agent_control_center/services/trusted_folder_store.dart';
 import 'package:agent_control_center/services/workspace_group_store.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _FakeBackend implements AgentBackend {
@@ -884,7 +885,7 @@ void main() {
       expect(manager.canMoveSession('running', 'missing'), isFalse);
     });
 
-    testWidgets('저장된 기록을 드래그해 그룹과 순서를 바꾸고 재시작 후에도 유지한다', (tester) async {
+    testWidgets('저장된 작업을 드래그해 그룹과 순서를 바꾸고 재시작 후에도 유지한다', (tester) async {
       final file = File('${temp.path}/groups.json');
       final persisted = WorkspaceGroupStore(file: file);
       final folder = Directory('${temp.path}/group')..createSync();
@@ -913,11 +914,11 @@ void main() {
 
       await dragTo(
         tester,
-        'saved_session_old',
-        'saved_session_new',
+        'session_card_old',
+        'session_card_new',
         fraction: 0.25,
       );
-      await dragTo(tester, 'saved_session_mid', 'group_drop_zone_g1');
+      await dragTo(tester, 'session_card_mid', 'group_drop_zone_g1');
 
       final reloaded = WorkspaceGroupStore(file: file);
       expect(reloaded.orderedSessions().map((s) => s.id).toList(), [
@@ -932,7 +933,7 @@ void main() {
       expect(reloaded.snapshotsFor('g1').single.id, 'mid');
 
       // 그룹 폴더와 같은 기록도 그룹 밖으로 꺼내면 다시 들어가지 않습니다.
-      await dragTo(tester, 'saved_session_mid', 'ungrouped_drop_zone');
+      await dragTo(tester, 'session_card_mid', 'ungrouped_drop_zone');
       expect(
         WorkspaceGroupStore(file: file).snapshotsFor('g1'),
         isEmpty,
@@ -940,7 +941,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const ValueKey('group_tile_g1')),
-          matching: find.byKey(const ValueKey('saved_session_mid')),
+          matching: find.byKey(const ValueKey('session_card_mid')),
         ),
         findsNothing,
       );
@@ -971,15 +972,25 @@ void main() {
       expect(reloaded.last.groupId, 'g1');
     });
 
-    testWidgets('저장된 이전 작업을 사이드바에서 열어 대화를 복원한다', (tester) async {
+    testWidgets('저장된 작업이 세션으로 복원되어 프롬프트를 입력하면 대화를 이어간다', (tester) async {
+      final created = <_FakeBackend>[];
+      trust.add(temp.path);
+      manager.dispose();
+      manager = SessionManager(
+        trustedFolders: trust,
+        groups: store,
+        registry: _registry(created),
+      );
+      final updatedAt = DateTime(2026, 1, 1);
       store.recordSession(
         SessionSnapshot(
-          id: 'previous',
+          id: 'previous@1',
           title: '이전 차트 작업',
           backend: BackendType.claudeCode,
           lastTurn: '사용자: 차트를 그려줘\n에이전트: 완료했습니다',
-          updatedAt: DateTime.now(),
+          updatedAt: updatedAt,
           workingDirectory: temp.path,
+          conversationId: 'conv_previous',
         ),
       );
       manager.createSession(
@@ -990,21 +1001,82 @@ void main() {
       );
       await pumpHome(tester);
 
-      expect(find.text('이전 작업'), findsNothing);
-      await tap(tester, 'saved_session_previous');
+      expect(find.byIcon(Icons.history), findsNothing);
+      expect(manager.activeSessionId, 'current');
+      await tap(tester, 'session_card_previous');
 
       expect(manager.sessions, hasLength(2));
+      expect(manager.activeSessionId, 'previous');
       expect(manager.activeSession!.title, '이전 차트 작업');
+      expect(manager.activeSession!.events, hasLength(2));
       expect(
-        manager.activeSession!.events
-            .whereType<MessageEvent>()
-            .where((event) => event.role != 'system'),
-        hasLength(2),
+        store.searchSessions().single.updatedAt,
+        updatedAt,
+        reason: '열어 보기만 해서는 최근 작업이 되지 않습니다',
       );
-      expect(manager.sessions.first.title, '현재 작업');
+
+      await tester.enterText(
+        find.byKey(const ValueKey('prompt_textfield')),
+        '이어서 범례도 넣어줘',
+      );
+      final modifier = Platform.isMacOS
+          ? LogicalKeyboardKey.metaLeft
+          : LogicalKeyboardKey.controlLeft;
+      await tester.sendKeyDownEvent(modifier);
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.sendKeyUpEvent(modifier);
+      await tester.pumpAndSettle();
+
+      expect(created.single.lastConfig!.conversationId, 'conv_previous');
+      expect(
+        created.single.lastConfig!.systemPromptAppend,
+        isNot(contains('이전 작업')),
+      );
+      expect(created.single.prompts, ['이어서 범례도 넣어줘']);
+
+      created.single.finishTurn('넣었습니다');
+      await tester.pumpAndSettle();
+      expect(
+        store.searchSessions().map((s) => s.id),
+        ['previous@1'],
+        reason: '같은 작업이 두 번 저장되지 않습니다',
+      );
     });
 
-    testWidgets('이전 작업은 그룹 안에 표시되고 열면 그룹 세션으로 옮겨진다', (tester) async {
+    testWidgets('복원된 작업을 오른쪽 클릭 메뉴로 삭제하면 다시 나타나지 않는다', (tester) async {
+      final file = File('${temp.path}/groups.json');
+      SessionSnapshot saved(String id) => SessionSnapshot(
+        id: id,
+        title: id,
+        backend: BackendType.claudeCode,
+        lastTurn: '사용자: 질문',
+        updatedAt: DateTime.now(),
+        workingDirectory: temp.path,
+      );
+      final persisted = WorkspaceGroupStore(file: file)
+        ..recordSession(saved('keep'))
+        ..recordSession(saved('drop'));
+      manager.dispose();
+      manager = SessionManager(groups: persisted, registry: _registry([]));
+      await pumpHome(tester);
+
+      await tester.tap(
+        find.byKey(const ValueKey('session_card_drop')),
+        buttons: kSecondaryButton,
+      );
+      await tester.pumpAndSettle();
+      await tap(tester, 'session_menu_delete');
+      await tap(tester, 'confirm_delete_session_button');
+
+      expect(find.byKey(const ValueKey('session_card_drop')), findsNothing);
+      expect(manager.sessions.map((s) => s.sessionId), ['keep']);
+      expect(
+        WorkspaceGroupStore(file: file).searchSessions().map((s) => s.id),
+        ['keep'],
+      );
+    });
+
+    testWidgets('복원된 작업은 저장된 그룹이나 같은 폴더의 그룹에 들어간다', (tester) async {
       SessionSnapshot saved(String id, {String? groupId, String? folder}) =>
           SessionSnapshot(
             id: id,
@@ -1024,24 +1096,17 @@ void main() {
         ..upsert(_group(folder: temp.path))
         ..recordSession(saved('same_group', groupId: 'g1'))
         ..recordSession(saved('same_folder'))
-        ..recordSession(saved('other_folder', folder: '${temp.path}/other'));
+        ..recordSession(saved('other_folder', folder: '${temp.path}/other'))
+        ..recordSession(saved('left_group', groupId: SessionSnapshot.noGroup));
       await pumpHome(tester);
 
-      expect(inGroup('saved_session_same_group'), findsOneWidget);
-      expect(inGroup('saved_session_same_folder'), findsOneWidget);
-      expect(inGroup('saved_session_other_folder'), findsNothing);
+      expect(inGroup('session_card_same_group'), findsOneWidget);
+      expect(inGroup('session_card_same_folder'), findsOneWidget);
+      expect(inGroup('session_card_other_folder'), findsNothing);
+      expect(inGroup('session_card_left_group'), findsNothing);
       expect(
-        find.byKey(const ValueKey('saved_session_other_folder')),
+        find.byKey(const ValueKey('session_card_other_folder')),
         findsOneWidget,
-      );
-
-      await tap(tester, 'saved_session_same_folder');
-
-      expect(manager.activeSession!.groupId, 'g1');
-      expect(find.byKey(const ValueKey('saved_session_same_folder')), findsNothing);
-      expect(
-        store.searchSessions('', 50).where((s) => s.title == 'same_folder'),
-        hasLength(1),
       );
     });
 
@@ -1383,6 +1448,188 @@ void main() {
 
       expect(find.text('요청 1'), findsOneWidget);
       expect(find.text('완료 응답 1'), findsOneWidget);
+    });
+  });
+
+  group('저장된 작업 복원', () {
+    late Directory temp;
+    late File file;
+    late List<_FakeBackend> created;
+
+    setUp(() {
+      temp = Directory.systemTemp.createTempSync('acc_restore_');
+      file = File('${temp.path}/groups.json');
+      created = [];
+    });
+    tearDown(() => temp.deleteSync(recursive: true));
+
+    SessionManager restored({String? reply}) {
+      final manager = SessionManager(
+        groups: WorkspaceGroupStore(file: file),
+        registry: _registry(created, reply: reply),
+      )..restoreSavedSessions();
+      addTearDown(manager.dispose);
+      return manager;
+    }
+
+    SessionSnapshot saved(
+      String id, {
+      String? conversationId,
+      String? parentSessionId,
+      String? worktreePath,
+      List<WorktreeLink> worktreeLinks = const [],
+    }) => SessionSnapshot(
+      id: id,
+      title: id,
+      backend: BackendType.claudeCode,
+      lastTurn: '사용자: 결제 구현\n에이전트: 완료',
+      updatedAt: DateTime.now(),
+      workingDirectory: temp.path,
+      conversationId: conversationId,
+      parentSessionId: parentSessionId,
+      worktreePath: worktreePath,
+      worktreeLinks: worktreeLinks,
+    );
+
+    test('복원만으로는 백엔드를 실행하거나 기록을 바꾸지 않고, 다시 호출해도 중복되지 않는다', () {
+      final store = WorkspaceGroupStore(file: file)
+        ..recordSession(saved('a@1', conversationId: 'conv_a'));
+      final before = store.searchSessions().single.updatedAt;
+
+      final manager = restored()..restoreSavedSessions();
+
+      expect(manager.sessions.map((s) => s.sessionId), ['a']);
+      expect(manager.activeSessionId, 'a');
+      expect(created.single.startCount, 0);
+      expect(
+        WorkspaceGroupStore(file: file).searchSessions().single.updatedAt,
+        before,
+      );
+    });
+
+    test('이어갈 대화가 없으면 첫 프롬프트에서 컨텍스트를 넘긴다', () async {
+      WorkspaceGroupStore(file: file).recordSession(saved('a@1'));
+      final manager = restored();
+
+      await manager.sendPrompt('a', '계속');
+      expect(created.single.lastConfig!.conversationId, isNull);
+      expect(created.single.lastConfig!.systemPromptAppend, contains('결제 구현'));
+      expect(manager.sessions.single.needsRestoredContext, isFalse);
+    });
+
+    test('세션 번호가 겹치는 예전 기록은 모두 복원되고 새 세션은 빈 번호를 쓴다', () {
+      WorkspaceGroupStore(file: file)
+        ..recordSession(saved('session_1@1'))
+        ..recordSession(saved('session_1@2'))
+        ..recordSession(saved('session_2@3'));
+      final manager = restored();
+
+      expect(
+        manager.sessions.map((s) => s.snapshotId).toSet(),
+        {'session_1@1', 'session_1@2', 'session_2@3'},
+      );
+      expect(manager.sessions.map((s) => s.sessionId).toSet(), hasLength(3));
+      final fresh = manager.createSession(workingDirectory: temp.path);
+      expect(
+        manager.sessions.where((s) => s.sessionId == fresh.sessionId),
+        hasLength(1),
+      );
+    });
+
+    test('상위·하위 관계와 worktree, 병합 연결이 재시작 후에도 유지되어 같은 폴더에서 이어간다', () async {
+      final worktree = Directory('${temp.path}/wt')..createSync();
+      final link = WorktreeLink(
+        baseBranch: 'develop',
+        branch: 'acc/one',
+        worktreeRoot: worktree.path,
+        startCommit: 'aaa',
+      );
+      WorkspaceGroupStore(file: file)
+        ..recordSession(saved('parent@1'))
+        ..recordSession(
+          saved(
+            'child@2',
+            conversationId: 'conv_child',
+            parentSessionId: 'parent',
+            worktreePath: worktree.path,
+            worktreeLinks: [link],
+          ),
+        );
+
+      final manager = restored();
+      final child = manager.sessions.firstWhere((s) => s.sessionId == 'child');
+      expect(child.parentSessionId, 'parent');
+      expect(child.activeWorktreeLink!.branch, 'acc/one');
+
+      await manager.sendPrompt('child', '계속');
+      final config = created[manager.sessions.indexOf(child)].lastConfig!;
+      expect(config.workingDirectory, worktree.path);
+      expect(config.conversationId, 'conv_child');
+    });
+
+    test('worktree가 사라졌으면 대화 대신 컨텍스트로 이어가고 병합 연결은 기록으로 남긴다', () async {
+      WorkspaceGroupStore(file: file).recordSession(
+        saved(
+          'a@1',
+          conversationId: 'conv_a',
+          worktreePath: '${temp.path}/gone',
+          worktreeLinks: [
+            WorktreeLink(
+              baseBranch: 'develop',
+              branch: 'acc/gone',
+              worktreeRoot: '${temp.path}/gone',
+              startCommit: 'aaa',
+              mergeCommit: 'bbb',
+            ),
+          ],
+        ),
+      );
+      final manager = restored();
+      final session = manager.sessions.single;
+      expect(session.effectiveDirectory, temp.path);
+      expect(session.activeWorktreeLink, isNull);
+      expect(session.worktreeLinks.single.mergeCommit, 'bbb');
+
+      await manager.sendPrompt('a', '계속');
+      expect(created.single.lastConfig!.conversationId, isNull);
+      expect(created.single.lastConfig!.systemPromptAppend, contains('결제 구현'));
+    });
+
+    test('하위 세션을 지우면 상위 작업의 알림이 재시작 후 되살아나지 않는다', () async {
+      final manager = SessionManager(
+        groups: WorkspaceGroupStore(file: file),
+        registry: _registry(created),
+      );
+      addTearDown(manager.dispose);
+      final parent = manager.createSession(
+        sessionId: 'parent',
+        workingDirectory: temp.path,
+        initialEvents: [_user('질문')],
+      );
+      parent.events.add(
+        ChildWorktreeEvent(
+          id: 'c',
+          sessionId: 'parent',
+          backend: BackendType.claudeCode,
+          timestamp: DateTime.now(),
+          childSessionId: 'child',
+          childTitle: '하위',
+          message: '병합 필요',
+          needsAttention: true,
+        ),
+      );
+      manager.createSession(
+        sessionId: 'child',
+        workingDirectory: temp.path,
+        parentSessionId: 'parent',
+      );
+
+      await manager.deleteSession('child');
+
+      expect(
+        restored().sessions.single.childAttentionCount,
+        0,
+      );
     });
   });
 }
