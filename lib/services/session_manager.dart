@@ -546,15 +546,108 @@ class SessionManager extends ChangeNotifier {
         _restartOnNextPrompt(session);
       }
       // ponytail: 실행 중이거나 미병합 worktree가 있는 세션은 기존 폴더에 남습니다. 함께 옮겨야 하면 병합 후 재적용합니다.
-      if (session.groupId == group.id &&
-          session.status != SessionStatus.running &&
-          session.status != SessionStatus.awaitingApproval &&
-          session.activeWorktreeLink == null) {
+      if (session.groupId == group.id && _canChangeDirectory(session)) {
         _moveToDirectory(session, group.folder);
       }
     }
     notifyListeners();
   }
+
+  bool _canChangeDirectory(ManagedSession session) =>
+      session.status != SessionStatus.running &&
+      session.status != SessionStatus.awaitingApproval &&
+      session.activeWorktreeLink == null;
+
+  List<ManagedSession> _withDescendants(ManagedSession root) {
+    final result = [root];
+    for (var i = 0; i < result.length; i++) {
+      result.addAll(
+        _sessions.values.where(
+          (s) => s.parentSessionId == result[i].sessionId,
+        ),
+      );
+    }
+    return result;
+  }
+
+  /// 자신의 하위 세션 옆으로는 옮길 수 없고, 폴더를 바꿀 수 없는 세션은 폴더가 다른 그룹으로 옮길 수 없습니다.
+  bool canMoveSession(String sessionId, String? groupId, {String? targetId}) {
+    final session = _sessions[sessionId];
+    if (session == null) return false;
+    final moving = _withDescendants(session);
+    if (moving.any((s) => s.sessionId == targetId)) return false;
+    if (groupId == null) return true;
+    final folder = groups?.groupById(groupId)?.folder;
+    if (folder == null) return false;
+    return moving.every(
+      (s) =>
+          s.groupId == groupId ||
+          s.workingDirectory == folder ||
+          _canChangeDirectory(s),
+    );
+  }
+
+  /// 세션을 하위 세션과 함께 [groupId]로 옮깁니다. [targetId]가 있으면 그 세션의 앞이나 뒤에
+  /// 같은 상위 세션의 하위로 놓고, 없으면 그룹의 맨 끝에 놓습니다.
+  void moveSession(
+    String sessionId,
+    String? groupId, {
+    String? targetId,
+    bool after = false,
+  }) {
+    if (!canMoveSession(sessionId, groupId, targetId: targetId)) return;
+    final session = _sessions[sessionId]!;
+    final target = _sessions[targetId];
+    final oldParent = _sessions[session.parentSessionId];
+    // 다른 그룹에 남은 상위 세션과의 관계는 유지해 작업 보고를 계속 받습니다.
+    final parentId = target != null
+        ? target.parentSessionId
+        : (oldParent?.groupId == groupId ? null : session.parentSessionId);
+    if (session.parentSessionId != parentId) {
+      oldParent?.events.removeWhere(
+        (e) => e is ChildWorktreeEvent && e.childSessionId == sessionId,
+      );
+      session.parentSessionId = parentId;
+    }
+    final folder = groups?.groupById(groupId)?.folder;
+    for (final moved in _withDescendants(session)) {
+      if (moved.groupId == groupId) continue;
+      moved.groupId = groupId;
+      _restartOnNextPrompt(moved);
+      if (folder != null) _moveToDirectory(moved, folder);
+      _recordSnapshot(moved);
+    }
+    final ordered = [..._sessions.values]..remove(session);
+    ordered.insert(
+      target == null
+          ? ordered.length
+          : ordered.indexOf(target) + (after ? 1 : 0),
+      session,
+    );
+    _sessions
+      ..clear()
+      ..addAll({for (final s in ordered) s.sessionId: s});
+    _historyStore.putFirstInOrder([for (final s in ordered) s.snapshotId]);
+    notifyListeners();
+  }
+
+  void moveSavedSession(
+    String snapshotId,
+    String? groupId, {
+    String? targetId,
+    bool after = false,
+  }) {
+    _historyStore.moveSnapshot(
+      snapshotId,
+      groupId,
+      targetId: targetId,
+      after: after,
+    );
+    notifyListeners();
+  }
+
+  List<SessionSnapshot> get orderedSavedSessions =>
+      _historyStore.orderedSessions();
 
   /// 그룹을 지워도 세션은 그룹 없는 세션으로 남습니다.
   void deleteGroup(String groupId) {
@@ -601,7 +694,7 @@ class SessionManager extends ChangeNotifier {
         model: session.model,
         effort: session.effort,
         workingDirectory: session.workingDirectory,
-        groupId: session.groupId,
+        groupId: session.groupId ?? SessionSnapshot.noGroup,
         instructions: session.instructions,
         permissionMode: session.permissionMode,
       ),

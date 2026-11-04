@@ -750,8 +750,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         if (_showSessionSidebar)
           MultiSessionSidebar(
             sessions: _sessionManager.sessions,
-            savedSessions: _sessionManager
-                .searchSavedSessions('', 50)
+            savedSessions: _sessionManager.orderedSavedSessions
                 .where(
                   (snapshot) => !_sessionManager.sessions.any(
                     (session) => session.snapshotId == snapshot.id,
@@ -759,6 +758,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 )
                 .toList(),
             onOpenSavedSession: _openSavedSession,
+            canMoveSession: _sessionManager.canMoveSession,
+            onMoveSession: _sessionManager.moveSession,
+            onMoveSavedSession: _sessionManager.moveSavedSession,
             activeSessionId: _sessionManager.activeSessionId,
             usageByBackend: _sessionManager.usageByBackend,
             onSelectSession: _sessionManager.selectSession,

@@ -58,6 +58,9 @@ class WorkspaceGroup {
 
 /// 앱을 다시 켠 뒤에도 이어갈 수 있도록 남기는 세션의 작업 기록
 class SessionSnapshot {
+  /// 그룹 밖에 둔 기록의 [groupId]입니다. null은 그룹을 기록하기 전의 예전 기록을 뜻합니다.
+  static const noGroup = '';
+
   const SessionSnapshot({
     required this.id,
     required this.title,
@@ -241,6 +244,7 @@ class WorkspaceGroupStore {
   final Map<String, List<SessionSnapshot>> _snapshots = {};
   final List<SessionSnapshot> _savedSessions = [];
   String _defaultInstructions = '';
+  List<String> _sessionOrder = const [];
 
   List<WorkspaceGroup> get groups => _groups.values.toList(growable: false);
 
@@ -288,6 +292,54 @@ class WorkspaceGroupStore {
     return List.unmodifiable(filtered);
   }
 
+  /// 드래그로 정한 순서를 따르고, 순서가 없는 기록은 최근 작업순으로 앞에 둡니다.
+  List<SessionSnapshot> orderedSessions() {
+    final rank = {for (final (i, id) in _sessionOrder.indexed) id: i};
+    return [...searchSessions('', _maxSavedSessions)]..sort((a, b) {
+      final byRank = (rank[a.id] ?? -1).compareTo(rank[b.id] ?? -1);
+      return byRank != 0 ? byRank : b.updatedAt.compareTo(a.updatedAt);
+    });
+  }
+
+  /// [first]를 앞세우고 나머지 기록은 지금 순서대로 뒤에 둡니다.
+  void putFirstInOrder(List<String> first) {
+    _sessionOrder = [
+      ...first,
+      for (final s in orderedSessions())
+        if (!first.contains(s.id)) s.id,
+    ];
+    _saveHistory();
+  }
+
+  /// 저장된 기록을 다른 그룹이나 [targetId] 앞뒤로 옮깁니다.
+  void moveSnapshot(
+    String snapshotId,
+    String? groupId, {
+    String? targetId,
+    bool after = false,
+  }) {
+    final ordered = orderedSessions();
+    final snapshot = ordered.where((s) => s.id == snapshotId).firstOrNull;
+    if (snapshot == null) return;
+    final ids = [
+      for (final s in ordered)
+        if (s.id != snapshotId) s.id,
+    ];
+    final target = ids.indexOf(targetId ?? '');
+    ids.insert(target < 0 ? ids.length : target + (after ? 1 : 0), snapshotId);
+    _sessionOrder = ids;
+    final folder = _groups[groupId]?.folder ?? snapshot.workingDirectory;
+    recordSession(
+      SessionSnapshot.fromJson({
+        ...snapshot.toJson(),
+        'groupId': groupId ?? SessionSnapshot.noGroup,
+        'workingDirectory': folder,
+        // 대화는 폴더에 묶여 있어 폴더가 바뀌면 이어갈 수 없습니다.
+        if (folder != snapshot.workingDirectory) 'conversationId': null,
+      }),
+    );
+  }
+
   void _upsertSavedSession(SessionSnapshot snapshot) {
     _savedSessions
       ..removeWhere((s) => s.id == snapshot.id)
@@ -324,10 +376,13 @@ class WorkspaceGroupStore {
   /// 그룹 여부와 무관하게 세션 내용과 메타데이터를 저장합니다.
   void recordSession(SessionSnapshot snapshot) {
     _upsertSavedSession(snapshot);
+    // 다른 그룹으로 옮겨졌으면 이전 그룹의 목록에서도 뺍니다.
+    for (final list in _snapshots.values) {
+      list.removeWhere((s) => s.id == snapshot.id);
+    }
     final groupId = snapshot.groupId;
     if (groupId != null && _groups.containsKey(groupId)) {
       final list = _snapshots.putIfAbsent(groupId, () => [])
-        ..removeWhere((s) => s.id == snapshot.id)
         ..insert(0, snapshot);
       if (list.length > _maxSnapshotsPerGroup) list.removeLast();
     }
@@ -385,6 +440,8 @@ class WorkspaceGroupStore {
         });
       }
       _addSavedSessions(saved['sessions']);
+      final order = saved['sessionOrder'];
+      if (order is List) _sessionOrder = order.whereType<String>().toList();
     } on Exception catch (_) {
       _discardCorrupt(file);
     } on TypeError catch (_) {
@@ -450,6 +507,7 @@ class WorkspaceGroupStore {
             groupId: [for (final s in snapshotsFor(groupId)) s.toJson()],
         },
         'sessions': [for (final s in _savedSessions) s.toJson()],
+        if (_sessionOrder.isNotEmpty) 'sessionOrder': _sessionOrder,
       });
       return true;
     } on FileSystemException catch (_) {
