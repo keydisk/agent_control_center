@@ -20,6 +20,42 @@ class AntigravityAdapter implements AgentBackend {
        _hookBridge = hookBridge,
        _ownsHookBridge = hookBridge == null;
 
+  /// 자동 모드가 꺼진 계정은 허용되지 않은 명령마다 턴이 끝나고 재시작하므로, 자주 쓰는 명령을 먼저 허용합니다.
+  /// 셸·인터프리터처럼 인자가 곧 실행 내용인 명령과 파괴적 변형이 있는 명령(find, git push 등)은 넣지 않습니다.
+  /// agy는 `ls; rm x`, 파이프, 치환, 리다이렉션이 섞이면 규칙과 맞지 않는 것으로 보고 거부합니다.
+  // ponytail: `rg --pre`처럼 인자로 프로그램을 실행하는 옵션은 못 막습니다. 문제가 되면 해당 명령을 목록에서 뺍니다.
+  static const safeCommandRules = [
+    'command(git status *)',
+    'command(git diff *)',
+    'command(git log *)',
+    'command(git show *)',
+    'command(git add *)',
+    'command(git commit *)',
+    'command(git fetch *)',
+    'command(git rev-parse *)',
+    'command(git ls-files *)',
+    'command(git blame *)',
+    'command(git merge-base *)',
+    'command(git worktree list *)',
+    // `명령 *`은 인자 없는 한 단어 명령과 맞지 않습니다.
+    'command(ls)',
+    'command(ls *)',
+    'command(pwd)',
+    'command(cat *)',
+    'command(head *)',
+    'command(tail *)',
+    'command(wc *)',
+    'command(grep *)',
+    'command(rg *)',
+    'command(which *)',
+    'command(flutter analyze *)',
+    'command(flutter test *)',
+    'command(flutter pub get *)',
+    'command(dart analyze *)',
+    'command(dart format *)',
+    'command(dart test *)',
+  ];
+
   static File _defaultUserSettingsFile() => File(
     '${Platform.environment['HOME'] ?? ''}/.gemini/antigravity-cli/settings.json',
   );
@@ -49,6 +85,7 @@ class AntigravityAdapter implements AgentBackend {
   final Set<String> _allowedRules = {};
   DoneEvent? _heldDone;
   TokenUsage _carriedUsage = const TokenUsage();
+  bool _modeNoticeShown = false;
 
   @override
   BackendType get backendType => BackendType.antigravity;
@@ -86,6 +123,10 @@ class AntigravityAdapter implements AgentBackend {
           );
         });
 
+    final autoRules =
+        !config.skipsPermissions && config.permissionMode == PermissionMode.auto
+        ? safeCommandRules
+        : const <String>[];
     final args = <String>[
       '--input-format',
       'stream-json',
@@ -110,7 +151,9 @@ class AntigravityAdapter implements AgentBackend {
           PermissionMode.plan => ['--mode', 'plan'],
           _ => const <String>[],
         },
-      if (_allowedRules.isNotEmpty || config.trustedDirectories.isNotEmpty) ...[
+      if (_allowedRules.isNotEmpty ||
+          config.trustedDirectories.isNotEmpty ||
+          autoRules.isNotEmpty) ...[
         '--settings',
         jsonEncode({
           'permissions': {
@@ -120,6 +163,7 @@ class AntigravityAdapter implements AgentBackend {
                 'read_file($dir)',
                 'write_file($dir)',
               ],
+              ...autoRules,
               ..._allowedRules,
             }.toList(),
           },
@@ -214,6 +258,23 @@ class AntigravityAdapter implements AgentBackend {
 
   void _onStderrLine(String line) {
     _rawLogsController.add('[stderr] $line');
+    if (line.contains('--mode auto is not available') && !_modeNoticeShown) {
+      _modeNoticeShown = true;
+      _eventsController.add(
+        MessageEvent(
+          id: 'agy_mode_${DateTime.now().microsecondsSinceEpoch}',
+          sessionId: _config?.sessionId ?? 'default',
+          backend: BackendType.antigravity,
+          model: _config?.effectiveModel ?? '',
+          timestamp: DateTime.now(),
+          role: 'system',
+          text:
+              '이 계정은 Antigravity 자동 모드를 쓸 수 없어 기본 모드로 실행합니다. '
+              '자주 쓰는 명령 외에는 승인 후 대화를 다시 시작하므로 작업이 잠시 끊길 수 있습니다.',
+          rawLog: line,
+        ),
+      );
+    }
     if (line.trim().startsWith('Error:') || line.trim().startsWith('error:')) {
       _eventsController.add(
         ErrorEvent(

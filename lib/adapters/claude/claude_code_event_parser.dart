@@ -14,6 +14,9 @@ class ClaudeCodeEventParser {
   String? _streamingMessageId;
   final Set<String> _streamedMessageIds = {};
 
+  /// 답을 기다리는 AskUserQuestion의 원본 입력 (요청 ID → 입력)
+  final Map<String, Map<String, dynamic>> questionInputs = {};
+
   String _nextId(String prefix) => '${prefix}_${sessionId}_${++_counter}';
 
   /// `--include-partial-messages`의 토큰 단위 델타를 실시간 메시지로 변환합니다.
@@ -119,7 +122,8 @@ class ClaudeCodeEventParser {
               }
               qItems.add(
                 AgentQuestionItem(
-                  id: (q['header'] ?? 'q_$i').toString(),
+                  // CLI는 질문 문장을 답변의 키로 사용합니다.
+                  id: (q['question'] ?? 'q_$i').toString(),
                   header: (q['header'] ?? '질문').toString(),
                   question: (q['question'] ?? '').toString(),
                   options: opts,
@@ -128,6 +132,7 @@ class ClaudeCodeEventParser {
               );
             }
           }
+          questionInputs[reqId] = args;
           return [
             QuestionEvent(
               request: QuestionRequestData(

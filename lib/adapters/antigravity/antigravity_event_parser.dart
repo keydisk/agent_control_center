@@ -15,6 +15,7 @@ class AntigravityEventParser {
   int _counter = 0;
   bool _askedApprovalForDenial = false;
   final Map<String, Map<String, dynamic>> _unfinishedCommands = {};
+  (String, Map<String, dynamic>)? _lastMcpCall;
 
   /// 자동 거부된 승인 요청별로 `permissions.allow`에 넣을 규칙
   final Map<String, String> deniedRules = {};
@@ -155,6 +156,14 @@ class AntigravityEventParser {
           _unfinishedCommands[commandId] = Map.of(toolArgs);
         }
       }
+
+      // MCP 거부는 오류 없이 턴을 끝내므로 마지막 호출이 거부 대상입니다.
+      _lastMcpCall =
+          toolName == 'call_mcp_tool' &&
+              toolArgs['ServerName'] is String &&
+              toolArgs['ToolName'] is String
+          ? (commandId, toolArgs)
+          : null;
 
       // 스킬 파일 읽기 또는 ego-browser / cli-hub 실행 시 SkillInvokedEvent 추가 발행
       final detectedSkill = _detectSkillFromTool(toolName, toolArgs);
@@ -389,6 +398,22 @@ class AntigravityEventParser {
         }
       }
       _unfinishedCommands.clear();
+      final mcpCall = _lastMcpCall;
+      if (mcpCall != null &&
+          denied is List &&
+          denied.any((action) => action is Map && action['action'] == 'mcp')) {
+        final (id, args) = mcpCall;
+        events.add(
+          _approvalForDenial(
+            id,
+            'call_mcp_tool',
+            args,
+            'mcp(${args['ServerName']}/${args['ToolName']})',
+            trimmed,
+          ),
+        );
+      }
+      _lastMcpCall = null;
       // 구체적인 명령을 복원할 수 없는 거부는 이유를 직접 알립니다.
       if (denied is List && denied.isNotEmpty && !_askedApprovalForDenial) {
         final names = denied

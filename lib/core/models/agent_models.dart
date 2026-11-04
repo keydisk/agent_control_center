@@ -266,16 +266,68 @@ class ApprovalRequestData {
   String get formattedArguments =>
       const JsonEncoder.withIndent('  ').convert(arguments);
 
+  /// 인자가 명령이 아니라 설명·검색어인 도구. 실제 실행은 별도 승인 요청으로 옵니다.
+  static const _nonExecutingTools = {
+    'Agent',
+    'Task',
+    'TodoWrite',
+    'WebSearch',
+    'WebFetch',
+    'ToolSearch',
+    'Skill',
+    'Grep',
+    'Glob',
+    'grep_search',
+    'search_web',
+    'read_url_content',
+  };
+
+  static final _commitHeredoc = RegExp(
+    r'''"\$\(cat <<'(\w+)'\n[\s\S]*?\n\s*\1\s*\)"''',
+  );
+  static final _quotedString = RegExp(r'''\'[^\']*\'|"(?:[^"\\]|\\.)*"''');
+  static final _commandSeparator = RegExp(r'&&|\|\||[;|\n]|(?<!>)&(?!>)');
+  static final _inertCommand = RegExp(
+    r'^\s*(?:git\s+(?:add|commit|diff|grep|log|show|status)|cat|cd|echo|egrep|grep|head|ls|printf|rg|tail|wc)(?:\s|$)',
+  );
+
+  /// 안전장치가 없는 강제 삭제만 묻습니다. 일반 `-d`와 `worktree remove`는 git이 미병합·변경 내용을 지키며 거절합니다.
+  static final _forcedBranchOrWorktree = RegExp(
+    r'\bgit\s+(?:branch|worktree\s+remove)\b[^;&|\n]*\s(?:-[A-Za-z]*[Df]|--force)\b',
+  );
+
+  /// 커밋 메시지·검색어처럼 실행되지 않는 문자열을 뺍니다.
+  /// 문자열을 실행할 수 있는 명령(`sh -c`, `psql -c` 등)이 섞이면 원문 그대로 판별합니다.
+  static String _withoutInertStrings(String command) {
+    final stripped = command.replaceAll(_commitHeredoc, '""').replaceAllMapped(
+      _quotedString,
+      (match) {
+        final quoted = match[0]!;
+        return quoted.contains(r'$(') || quoted.contains('`') ? quoted : '""';
+      },
+    );
+    final allInert = stripped
+        .split(_commandSeparator)
+        .every((part) => part.trim().isEmpty || _inertCommand.hasMatch(part));
+    return allInert ? stripped : command;
+  }
+
   static bool detectDestructive(String toolName, Map<String, dynamic> args) {
     final lowerTool = toolName.toLowerCase();
-    if (lowerTool.contains('delete') || lowerTool.contains('remove')) {
+    if (lowerTool.contains('delete') ||
+        RegExp(r'remove(?!_?label)').hasMatch(lowerTool)) {
       return true;
     }
+    if (_nonExecutingTools.contains(toolName)) return false;
     final command = args['CommandLine'] ?? args['command'] ?? args['cmd'];
     // 파일 내용에 'rm -rf'가 적혀 있는 것과 실행하는 것은 다르므로 파일 도구는 내용을 보지 않습니다.
     const pathKeys = ['file_path', 'notebook_path', 'Path', 'TargetFile', 'path'];
     if (command == null && pathKeys.any(args.containsKey)) return false;
-    final joined = (command ?? jsonEncode(args)).toString().toLowerCase();
+    final text = command == null
+        ? jsonEncode(args)
+        : _withoutInertStrings(command.toString());
+    if (_forcedBranchOrWorktree.hasMatch(text)) return true;
+    final joined = text.toLowerCase();
     // ponytail: 명령 문자열 패턴 판별이라 스크립트 안의 삭제나 우회 표현은 못 잡습니다. 놓친 패턴은 여기에 더합니다.
     final destructivePatterns = [
       RegExp(r'\b(rm|rmdir|unlink|shred|mkfs(\.\w+)?)(\s|$)'),
@@ -284,8 +336,8 @@ class ApprovalRequestData {
       RegExp(r'\bgit\s+push\b.*(--force|\s-f\b|--delete|\s-d\b|\s\+\S)'),
       RegExp(r'\bgit\s+reset\s+--hard\b|\bgit\s+clean\s'),
       RegExp(r'\bgit\s+checkout\s+(--\s|\.(\s|$))|\bgit\s+restore\s'),
-      RegExp(r'\bgit\s+(branch|tag)\s+(-d|--delete)\b'),
-      RegExp(r'\bgit\s+stash\s+(drop|clear)\b|\bgit\s+worktree\s+remove\b'),
+      RegExp(r'\bgit\s+tag\s+(-d|--delete)\b'),
+      RegExp(r'\bgit\s+stash\s+(drop|clear)\b'),
       RegExp(r'\bgit\s+filter-(branch|repo)\b'),
       RegExp(r'\bdrop\s+(table|database|schema)\b|\bdelete\s+from\s'),
       RegExp(r'\bkubectl\s+delete\b|\bterraform\s+destroy\b'),
