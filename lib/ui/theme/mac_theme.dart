@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../core/models/agent_models.dart';
+
 const String kMonoFont = 'Menlo';
 
 /// macOS 시스템 색상 값. 라이트 모드는 글자 대비를 위해 고대비 변형을 씁니다.
@@ -23,6 +25,7 @@ class MacColors extends ThemeExtension<MacColors> {
     required this.codeBackground,
     required this.codeHeader,
     required this.codeText,
+    required this.backendPalette,
   });
 
   static const light = MacColors(
@@ -41,6 +44,7 @@ class MacColors extends ThemeExtension<MacColors> {
     codeBackground: Color(0xFFF5F5F7),
     codeHeader: Color(0xFFEBEBED),
     codeText: Color(0xFF1D1D1F),
+    backendPalette: [Color(0xFF0066D6), Color(0xFFC43A70), Color(0xFF7A5CD6)],
   );
 
   static const dark = MacColors(
@@ -59,6 +63,7 @@ class MacColors extends ThemeExtension<MacColors> {
     codeBackground: Color(0xFF161618),
     codeHeader: Color(0xFF232325),
     codeText: Color(0xFFE5E5E7),
+    backendPalette: [Color(0xFF3B93F5), Color(0xFFD96A95), Color(0xFF9580EA)],
   );
 
   final Color window;
@@ -76,6 +81,18 @@ class MacColors extends ThemeExtension<MacColors> {
   final Color codeBackground;
   final Color codeHeader;
   final Color codeText;
+
+  /// [BackendType] 선언 순서의 그래프 색상. 색각 이상 구분까지 검증한 값입니다.
+  final List<Color> backendPalette;
+
+  Color backendColor(BackendType backend) => backendPalette[backend.index];
+
+  /// 한도 소진율(0~1)의 상태 색상. 많이 쓸수록 초록 → 주황 → 빨강입니다.
+  Color usageLevelColor(double fraction) => fraction >= 0.8
+      ? red
+      : fraction >= 0.5
+      ? orange
+      : green;
 
   /// 네이티브 창의 NSVisualEffectView가 비치는 영역. macOS 외에는 불투명합니다.
   Color get sidebar => Platform.isMacOS ? Colors.transparent : codeHeader;
