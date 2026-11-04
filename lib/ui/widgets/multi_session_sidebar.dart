@@ -11,6 +11,18 @@ import '../../services/workspace_group_store.dart';
 import 'mac_window_drag_area.dart';
 import 'timeline_widgets.dart';
 
+/// 드래그 중인 항목. 열린 세션은 세션 id, 저장된 기록은 기록 id를 담습니다.
+typedef _SessionDrag = ({String id, bool saved});
+
+/// [targetId]가 있으면 그 항목의 앞이나 뒤, 없으면 [groupId]의 맨 끝으로 옮깁니다.
+typedef SessionMoveCallback =
+    void Function(
+      String id,
+      String? groupId, {
+      String? targetId,
+      bool after,
+    });
+
 class MultiSessionSidebar extends StatelessWidget {
   const MultiSessionSidebar({
     super.key,
@@ -42,6 +54,9 @@ class MultiSessionSidebar extends StatelessWidget {
     this.onNewChildSession,
     this.isGroupCollapsed,
     this.onGroupCollapsedChanged,
+    this.canMoveSession,
+    this.onMoveSession,
+    this.onMoveSavedSession,
   });
 
   final List<ManagedSession> sessions;
@@ -77,6 +92,27 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<String>? onNewChildSession;
   final bool Function(String groupId)? isGroupCollapsed;
   final void Function(String groupId, bool collapsed)? onGroupCollapsedChanged;
+  final bool Function(String sessionId, String? groupId, {String? targetId})?
+  canMoveSession;
+  final SessionMoveCallback? onMoveSession;
+  final SessionMoveCallback? onMoveSavedSession;
+
+  bool _canDrop(_SessionDrag drag, String? groupId, [String? targetId]) =>
+      drag.saved
+      ? onMoveSavedSession != null && drag.id != targetId
+      : canMoveSession?.call(drag.id, groupId, targetId: targetId) ?? false;
+
+  void _drop(
+    _SessionDrag drag,
+    String? groupId, {
+    String? targetId,
+    bool after = false,
+  }) => (drag.saved ? onMoveSavedSession : onMoveSession)?.call(
+    drag.id,
+    groupId,
+    targetId: targetId,
+    after: after,
+  );
 
   /// 상위 세션 바로 아래에 하위 세션이 오도록 펼칩니다.
   static List<(ManagedSession, int)> _flattenTree(
@@ -97,28 +133,44 @@ class MultiSessionSidebar extends StatelessWidget {
     return result;
   }
 
-  List<Widget> _sessionRows(List<ManagedSession> sessions) => [
+  List<Widget> _sessionRows(
+    List<ManagedSession> sessions,
+    String? groupId,
+  ) => [
     for (final (session, depth) in _flattenTree(sessions))
-      _SessionRow(
-        session: session,
-        depth: depth,
-        isSelected: session.sessionId == activeSessionId,
-        onSelect: () => onSelectSession(session.sessionId),
-        onStop: () => onStopSession(session.sessionId),
-        onRetry: () => onRetrySession(session.sessionId),
-        onRerun: (b) => onRerunWithBackend(session.sessionId, b),
-        onIsolate: () => onIsolateWorktree(session.sessionId),
-        onMerge: () => onMergeWorktree?.call(session.sessionId),
-        onNewSession: () => onNewSession(session.sessionId),
-        onNewChild: () => onNewChildSession?.call(session.sessionId),
-        onSettings: () => onSessionSettings?.call(session.sessionId),
-        onDelete: () => onDeleteSession?.call(session.sessionId),
+      _MovableRow(
+        key: ValueKey('movable_session_${session.sessionId}'),
+        drag: (id: session.sessionId, saved: false),
+        title: session.title,
+        canAccept: (drag) => _canDrop(drag, groupId, session.sessionId),
+        onDrop: (drag, after) => _drop(
+          drag,
+          groupId,
+          targetId: session.sessionId,
+          after: after,
+        ),
+        child: _SessionRow(
+          session: session,
+          depth: depth,
+          isSelected: session.sessionId == activeSessionId,
+          onSelect: () => onSelectSession(session.sessionId),
+          onStop: () => onStopSession(session.sessionId),
+          onRetry: () => onRetrySession(session.sessionId),
+          onRerun: (b) => onRerunWithBackend(session.sessionId, b),
+          onIsolate: () => onIsolateWorktree(session.sessionId),
+          onMerge: () => onMergeWorktree?.call(session.sessionId),
+          onNewSession: () => onNewSession(session.sessionId),
+          onNewChild: () => onNewChildSession?.call(session.sessionId),
+          onSettings: () => onSessionSettings?.call(session.sessionId),
+          onDelete: () => onDeleteSession?.call(session.sessionId),
+        ),
       ),
   ];
 
-  /// 저장된 그룹을 따르고, 그룹 없는 기록은 같은 폴더의 그룹에 넣습니다.
+  /// 저장된 그룹을 따르고, 그룹을 기록하기 전의 예전 기록은 같은 폴더의 그룹에 넣습니다.
   String? _groupIdOf(SessionSnapshot snapshot) {
     final all = groups ?? const <WorkspaceGroup>[];
+    if (snapshot.groupId == SessionSnapshot.noGroup) return null;
     if (all.any((g) => g.id == snapshot.groupId)) return snapshot.groupId;
     for (final group in all) {
       if (p.equals(group.folder, snapshot.workingDirectory)) return group.id;
@@ -129,22 +181,30 @@ class MultiSessionSidebar extends StatelessWidget {
   List<Widget> _savedRows(String? groupId) => [
     for (final snapshot in savedSessions)
       if (_groupIdOf(snapshot) == groupId)
-        ListTile(
-          key: ValueKey('saved_session_${snapshot.id}'),
-          dense: true,
-          visualDensity: VisualDensity.compact,
-          leading: const Icon(Icons.history, size: 16),
-          title: Text(
-            snapshot.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+        _MovableRow(
+          key: ValueKey('movable_saved_${snapshot.id}'),
+          drag: (id: snapshot.id, saved: true),
+          title: snapshot.title,
+          canAccept: (drag) => _canDrop(drag, groupId, snapshot.id),
+          onDrop: (drag, after) =>
+              _drop(drag, groupId, targetId: snapshot.id, after: after),
+          child: ListTile(
+            key: ValueKey('saved_session_${snapshot.id}'),
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            leading: const Icon(Icons.history, size: 16),
+            title: Text(
+              snapshot.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              snapshot.backend.displayName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            onTap: () => onOpenSavedSession?.call(snapshot, groupId),
           ),
-          subtitle: Text(
-            snapshot.backend.displayName,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          onTap: () => onOpenSavedSession?.call(snapshot, groupId),
         ),
   ];
 
@@ -192,20 +252,29 @@ class MultiSessionSidebar extends StatelessWidget {
                       onNewSession: () => onNewSessionInGroup?.call(group.id),
                       onEdit: () => onEditGroup?.call(group.id),
                       onDelete: () => onDeleteGroup?.call(group.id),
+                      canAcceptDrop: (drag) => _canDrop(drag, group.id),
+                      onDrop: (drag) => _drop(drag, group.id),
                       children: [
                         ..._sessionRows(
                           sessions.where((s) => s.groupId == group.id).toList(),
+                          group.id,
                         ),
                         ..._savedRows(group.id),
                       ],
                     ),
                   const SizedBox(height: 8),
                 ],
-                const _SidebarSectionLabel('작업 세션'),
+                _SectionDropZone(
+                  key: const ValueKey('ungrouped_drop_zone'),
+                  canAccept: (drag) => _canDrop(drag, null),
+                  onDrop: (drag) => _drop(drag, null),
+                  child: const _SidebarSectionLabel('작업 세션'),
+                ),
                 ..._sessionRows(
                   sessions
                       .where((s) => !groupIds.contains(s.groupId))
                       .toList(),
+                  null,
                 ),
                 ..._savedRows(null),
               ],
@@ -292,6 +361,114 @@ class MultiSessionSidebar extends StatelessWidget {
   }
 }
 
+/// 드래그로 옮길 수 있고, 다른 항목을 위쪽 절반에 놓으면 앞에, 아래쪽 절반에 놓으면 뒤에 받는 한 줄
+// ponytail: 드래그 중 목록이 자동으로 스크롤되지 않습니다. 긴 목록에서 불편하면 가장자리 자동 스크롤을 더합니다.
+class _MovableRow extends StatefulWidget {
+  const _MovableRow({
+    super.key,
+    required this.drag,
+    required this.title,
+    required this.canAccept,
+    required this.onDrop,
+    required this.child,
+  });
+
+  final _SessionDrag drag;
+  final String title;
+  final bool Function(_SessionDrag drag) canAccept;
+  final void Function(_SessionDrag drag, bool after) onDrop;
+  final Widget child;
+
+  @override
+  State<_MovableRow> createState() => _MovableRowState();
+}
+
+class _MovableRowState extends State<_MovableRow> {
+  bool _after = false;
+
+  void _trackPointer(DragTargetDetails<_SessionDrag> details) {
+    final box = context.findRenderObject()! as RenderBox;
+    final after = box.globalToLocal(details.offset).dy > box.size.height / 2;
+    if (after != _after) setState(() => _after = after);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mac = context.mac;
+    final edge = BorderSide(color: mac.blue, width: 2);
+    return DragTarget<_SessionDrag>(
+      onWillAcceptWithDetails: (details) => widget.canAccept(details.data),
+      onMove: _trackPointer,
+      onAcceptWithDetails: (details) => widget.onDrop(details.data, _after),
+      builder: (context, candidates, _) => DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          border: candidates.isEmpty
+              ? null
+              : Border(
+                  top: _after ? BorderSide.none : edge,
+                  bottom: _after ? edge : BorderSide.none,
+                ),
+        ),
+        child: Draggable<_SessionDrag>(
+          data: widget.drag,
+          // 앞뒤 판정이 포인터 위치를 기준으로 하도록 맞춥니다.
+          dragAnchorStrategy: pointerDragAnchorStrategy,
+          feedback: Material(
+            color: mac.sidebar,
+            elevation: 4,
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              constraints: const BoxConstraints(maxWidth: 220),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              child: Text(
+                widget.title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 13, color: mac.label),
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(opacity: 0.4, child: widget.child),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// 항목을 놓으면 그 구역의 맨 끝으로 옮기는 그룹 이름·구역 제목 영역
+class _SectionDropZone extends StatelessWidget {
+  const _SectionDropZone({
+    super.key,
+    required this.canAccept,
+    required this.onDrop,
+    required this.child,
+  });
+
+  final bool Function(_SessionDrag drag) canAccept;
+  final ValueChanged<_SessionDrag> onDrop;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return DragTarget<_SessionDrag>(
+      onWillAcceptWithDetails: (details) => canAccept(details.data),
+      onAcceptWithDetails: (details) => onDrop(details.data),
+      builder: (context, candidates, _) => DecoratedBox(
+        position: DecorationPosition.foreground,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(6),
+          border: candidates.isEmpty
+              ? null
+              : Border.all(color: context.mac.blue, width: 2),
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
 class _GroupSectionHeader extends StatelessWidget {
   const _GroupSectionHeader({required this.onNewGroup});
 
@@ -322,6 +499,8 @@ class _GroupTile extends StatelessWidget {
     required this.onNewSession,
     required this.onEdit,
     required this.onDelete,
+    required this.canAcceptDrop,
+    required this.onDrop,
     required this.children,
   });
 
@@ -331,6 +510,8 @@ class _GroupTile extends StatelessWidget {
   final VoidCallback onNewSession;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final bool Function(_SessionDrag drag) canAcceptDrop;
+  final ValueChanged<_SessionDrag> onDrop;
   final List<Widget> children;
 
   Future<void> _showContextMenu(BuildContext context, Offset position) async {
@@ -379,16 +560,24 @@ class _GroupTile extends StatelessWidget {
           tilePadding: const EdgeInsets.only(left: 4),
           childrenPadding: EdgeInsets.zero,
           minTileHeight: 30,
-          title: Tooltip(
-            message: '신뢰 폴더: ${group.folder}',
-            child: Text(
-              group.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 12.5,
-                fontWeight: FontWeight.w600,
-                color: mac.label,
+          title: _SectionDropZone(
+            key: ValueKey('group_drop_zone_${group.id}'),
+            canAccept: canAcceptDrop,
+            onDrop: onDrop,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Tooltip(
+                message: '신뢰 폴더: ${group.folder}',
+                child: Text(
+                  group.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: mac.label,
+                  ),
+                ),
               ),
             ),
           ),

@@ -711,6 +711,266 @@ void main() {
       await tester.pumpAndSettle();
     }
 
+    /// [fraction]은 놓을 위치의 세로 비율입니다. 0.25는 위쪽 절반, 0.75는 아래쪽 절반입니다.
+    Future<void> dragTo(
+      WidgetTester tester,
+      String fromKey,
+      String toKey, {
+      double fraction = 0.5,
+    }) async {
+      final target = tester.getRect(find.byKey(ValueKey(toKey)));
+      final gesture = await tester.startGesture(
+        tester.getCenter(find.byKey(ValueKey(fromKey))),
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.moveBy(const Offset(0, 12));
+      await tester.pump();
+      await gesture.moveTo(
+        Offset(target.center.dx, target.top + target.height * fraction),
+      );
+      await tester.pump();
+      await gesture.up();
+      await tester.pumpAndSettle();
+    }
+
+    ManagedSession session(String id, {String? groupId, String? parent}) =>
+        manager.createSession(
+          sessionId: id,
+          title: id,
+          backendOverride: _FakeBackend(),
+          workingDirectory: temp.path,
+          groupId: groupId,
+          parentSessionId: parent,
+        );
+
+    double topOf(WidgetTester tester, String key) =>
+        tester.getTopLeft(find.byKey(ValueKey(key))).dy;
+
+    testWidgets('세션을 드래그해 그룹으로 옮기면 하위 세션과 폴더도 따라간다', (tester) async {
+      final folder = Directory('${temp.path}/group')..createSync();
+      store.upsert(_group(folder: folder.path));
+      final root = session('root');
+      final child = session('child', parent: 'root');
+      await pumpHome(tester);
+
+      await dragTo(tester, 'session_card_root', 'group_drop_zone_g1');
+
+      for (final moved in [root, child]) {
+        expect(moved.groupId, 'g1');
+        expect(moved.workingDirectory, folder.path);
+      }
+      expect(child.parentSessionId, 'root');
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('group_tile_g1')),
+          matching: find.byKey(const ValueKey('session_card_child')),
+        ),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('하위 세션을 다른 그룹으로 옮겨도 상위 세션 보고 관계는 유지한다', (tester) async {
+      store
+        ..upsert(_group(folder: temp.path))
+        ..upsert(_group(id: 'g2', folder: temp.path));
+      session('root', groupId: 'g1');
+      final child = session('child', groupId: 'g1', parent: 'root');
+      await pumpHome(tester);
+
+      await dragTo(tester, 'session_card_child', 'group_drop_zone_g2');
+
+      expect(child.groupId, 'g2');
+      expect(child.parentSessionId, 'root');
+      expect(find.byKey(const ValueKey('session_child_child')), findsNothing);
+    });
+
+    testWidgets('세션을 위·아래 절반에 놓아 보이는 순서를 바꾼다', (tester) async {
+      session('a');
+      session('b');
+      session('c');
+      await pumpHome(tester);
+
+      await dragTo(
+        tester,
+        'session_card_c',
+        'session_card_a',
+        fraction: 0.25,
+      );
+      expect(manager.sessions.map((s) => s.sessionId), ['c', 'a', 'b']);
+
+      await dragTo(
+        tester,
+        'session_card_c',
+        'session_card_b',
+        fraction: 0.75,
+      );
+      expect(manager.sessions.map((s) => s.sessionId), ['a', 'b', 'c']);
+      expect(
+        topOf(tester, 'session_card_c'),
+        greaterThan(topOf(tester, 'session_card_b')),
+      );
+    });
+
+    testWidgets('하위 세션을 다른 세션 옆에 놓으면 그 자리의 형제가 된다', (tester) async {
+      final parent = session('parent');
+      final kid = session('kid', parent: 'parent');
+      session('other');
+      parent.events.add(
+        ChildWorktreeEvent(
+          id: 'n',
+          sessionId: 'parent',
+          backend: BackendType.codex,
+          timestamp: DateTime.now(),
+          childSessionId: 'kid',
+          childTitle: 'kid',
+          message: '완료',
+        ),
+      );
+      await pumpHome(tester);
+
+      await dragTo(
+        tester,
+        'session_card_kid',
+        'session_card_other',
+        fraction: 0.75,
+      );
+
+      expect(kid.parentSessionId, isNull);
+      expect(parent.events.whereType<ChildWorktreeEvent>(), isEmpty);
+      expect(
+        topOf(tester, 'session_card_kid'),
+        greaterThan(topOf(tester, 'session_card_other')),
+      );
+    });
+
+    testWidgets('세션을 자기 위나 자기 하위 세션 위에 놓으면 그대로 둔다', (tester) async {
+      session('root');
+      session('kid', parent: 'root');
+      session('other');
+      await pumpHome(tester);
+
+      await dragTo(tester, 'session_card_root', 'session_card_kid');
+      await dragTo(tester, 'session_card_root', 'session_card_root');
+
+      expect(manager.sessions.map((s) => s.sessionId), ['root', 'kid', 'other']);
+      expect(manager.sessions[1].parentSessionId, 'root');
+    });
+
+    test('실행 중이거나 미병합 worktree가 있으면 폴더가 다른 그룹으로 옮기지 않는다', () {
+      final other = Directory('${temp.path}/other')..createSync();
+      store
+        ..upsert(_group(folder: temp.path))
+        ..upsert(_group(id: 'g2', folder: other.path));
+      final running = session('running')..status = SessionStatus.running;
+      final linked = session('linked')
+        ..isolatedWorktreePath = '/wt/one'
+        ..worktreeLinks.add(
+          const WorktreeLink(
+            baseBranch: 'develop',
+            branch: 'acc/one',
+            worktreeRoot: '/wt/one',
+            startCommit: 'aaa',
+          ),
+        );
+
+      for (final blocked in [running, linked]) {
+        expect(manager.canMoveSession(blocked.sessionId, 'g2'), isFalse);
+        manager.moveSession(blocked.sessionId, 'g2');
+        expect(blocked.groupId, isNull);
+        expect(blocked.workingDirectory, temp.path);
+      }
+      manager.moveSession('running', 'g1');
+      expect(running.groupId, 'g1', reason: '폴더가 같으면 옮길 수 있습니다');
+      expect(manager.canMoveSession('running', 'missing'), isFalse);
+    });
+
+    testWidgets('저장된 기록을 드래그해 그룹과 순서를 바꾸고 재시작 후에도 유지한다', (tester) async {
+      final file = File('${temp.path}/groups.json');
+      final persisted = WorkspaceGroupStore(file: file);
+      final folder = Directory('${temp.path}/group')..createSync();
+      final now = DateTime.now();
+      SessionSnapshot saved(String id, int age) => SessionSnapshot(
+        id: id,
+        title: id,
+        backend: BackendType.claudeCode,
+        lastTurn: '사용자: 질문',
+        updatedAt: now.subtract(Duration(minutes: age)),
+        workingDirectory: temp.path,
+        conversationId: 'conv_$id',
+      );
+      persisted
+        ..upsert(_group(folder: folder.path))
+        ..recordSession(saved('new', 0))
+        ..recordSession(saved('mid', 1))
+        ..recordSession(saved('old', 2));
+      manager.dispose();
+      manager = SessionManager(
+        trustedFolders: trust,
+        groups: persisted,
+        registry: _registry([]),
+      );
+      await pumpHome(tester);
+
+      await dragTo(
+        tester,
+        'saved_session_old',
+        'saved_session_new',
+        fraction: 0.25,
+      );
+      await dragTo(tester, 'saved_session_mid', 'group_drop_zone_g1');
+
+      final reloaded = WorkspaceGroupStore(file: file);
+      expect(reloaded.orderedSessions().map((s) => s.id).toList(), [
+        'old',
+        'new',
+        'mid',
+      ]);
+      final mid = reloaded.orderedSessions().last;
+      expect(mid.groupId, 'g1');
+      expect(mid.workingDirectory, folder.path);
+      expect(mid.conversationId, isNull);
+      expect(reloaded.snapshotsFor('g1').single.id, 'mid');
+
+      // 그룹 폴더와 같은 기록도 그룹 밖으로 꺼내면 다시 들어가지 않습니다.
+      await dragTo(tester, 'saved_session_mid', 'ungrouped_drop_zone');
+      expect(
+        WorkspaceGroupStore(file: file).snapshotsFor('g1'),
+        isEmpty,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('group_tile_g1')),
+          matching: find.byKey(const ValueKey('saved_session_mid')),
+        ),
+        findsNothing,
+      );
+    });
+
+    test('열린 세션의 그룹과 순서는 기록에 남아 재시작 후에도 유지한다', () {
+      final file = File('${temp.path}/groups.json');
+      final persisted = WorkspaceGroupStore(file: file)
+        ..upsert(_group(folder: temp.path));
+      final live = SessionManager(groups: persisted, registry: _registry([]));
+      addTearDown(live.dispose);
+      for (final id in ['a', 'b']) {
+        live.createSession(
+          sessionId: id,
+          title: id,
+          backendOverride: _FakeBackend(),
+          workingDirectory: temp.path,
+          initialEvents: [_user('질문 $id')],
+        );
+      }
+
+      live.moveSession('b', null, targetId: 'a');
+      live.moveSession('a', 'g1');
+
+      final reloaded = WorkspaceGroupStore(file: file).orderedSessions();
+      expect(reloaded.map((s) => s.title), ['b', 'a']);
+      expect(reloaded.first.groupId, SessionSnapshot.noGroup);
+      expect(reloaded.last.groupId, 'g1');
+    });
+
     testWidgets('저장된 이전 작업을 사이드바에서 열어 대화를 복원한다', (tester) async {
       store.recordSession(
         SessionSnapshot(
