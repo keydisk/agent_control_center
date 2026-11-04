@@ -7,7 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 ToolCallEvent _parseStep(Map<String, dynamic> fields) {
-  final parser = AntigravityEventParser(sessionId: 's', model: 'gemini-4-argon');
+  final parser = AntigravityEventParser(
+    sessionId: 's',
+    model: 'gemini-4-argon',
+  );
   final events = parser.parseLine(
     jsonEncode({
       'event': 'step_update',
@@ -44,11 +47,41 @@ void main() {
   testWidgets('실패 카드에 실패 문구를 보여 준다', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(body: ToolCallCard(event: _parseStep({'state': 'ERROR'}))),
+        home: Scaffold(
+          body: ToolCallCard(event: _parseStep({'state': 'ERROR'})),
+        ),
       ),
     );
     expect(find.textContaining('실패'), findsOneWidget);
     expect(find.textContaining('실행 중'), findsNothing);
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
+  });
+
+  testWidgets('커맨드 실행 카드는 기본으로 결과를 접어 둔다', (tester) async {
+    final event = ToolCallEvent(
+      id: 'cmd',
+      sessionId: 's',
+      backend: BackendType.codex,
+      timestamp: DateTime(2026),
+      toolName: 'command_execution',
+      arguments: const {'command': 'flutter test'},
+      result: '테스트 통과',
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ToolCallCard(event: event)),
+      ),
+    );
+
+    expect(find.text('테스트 통과'), findsNothing);
+    expect(find.textContaining('command_execution'), findsOneWidget);
+
+    await tester.tap(find.textContaining('command_execution'));
+    await tester.pumpAndSettle();
+    expect(find.text('테스트 통과'), findsOneWidget);
+
+    await tester.tap(find.textContaining('command_execution'));
+    await tester.pumpAndSettle();
+    expect(find.text('테스트 통과'), findsNothing);
   });
 }

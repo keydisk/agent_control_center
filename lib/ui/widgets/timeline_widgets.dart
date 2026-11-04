@@ -534,18 +534,20 @@ class ToolCallCard extends StatelessWidget {
             ),
           ],
         ),
-        subtitle: Text(
-          event.isRunning
-              ? '실행 중...'
-              : '⎿ ${event.result.trim().isEmpty ? '완료' : event.result.trim()}',
-          maxLines: 3,
-          overflow: TextOverflow.ellipsis,
-          style: TextStyle(
-            fontFamily: kMonoFont,
-            fontSize: 11.5,
-            color: event.isError ? context.mac.red : null,
-          ),
-        ),
+        subtitle: event.toolName == 'command_execution'
+            ? null
+            : Text(
+                event.isRunning
+                    ? '실행 중...'
+                    : '⎿ ${event.result.trim().isEmpty ? '완료' : event.result.trim()}',
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: kMonoFont,
+                  fontSize: 11.5,
+                  color: event.isError ? context.mac.red : null,
+                ),
+              ),
         childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
         expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
