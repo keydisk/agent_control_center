@@ -194,7 +194,11 @@ class ClaudeCodeAdapter implements AgentBackend {
         requestId: requestId,
         approved: true,
         scope: ApprovalScope.once,
-        updatedInput: {'answers': flatAnswers},
+        // CLI는 원본 입력에 answers를 더한 값을 검증하므로 questions를 함께 보냅니다.
+        updatedInput: {
+          ...?_parser?.questionInputs.remove(requestId),
+          'answers': flatAnswers,
+        },
       ),
     );
   }

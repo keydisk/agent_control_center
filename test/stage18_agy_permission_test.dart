@@ -264,6 +264,44 @@ void main() {
       }
     });
 
+    test('오류 없이 끝난 MCP 호출이 거부되면 그 도구의 승인을 요청한다', () {
+      String mcpStep(int index, String tool) => jsonEncode({
+        'event': 'step_update',
+        'step_update': {
+          'step_index': index,
+          'state': 'DONE',
+          'step_type': 'tool',
+          'tool_name': 'call_mcp_tool',
+          'tool_info': {
+            'name': 'call_mcp_tool',
+            'parameters': {'ServerName': 'dart', 'ToolName': tool},
+          },
+        },
+      });
+      const mcpDenied = {'action': 'mcp', 'display_name': 'CallMcpTool'};
+
+      parser.parseLine(mcpStep(45, 'pub'));
+      parser.parseLine(mcpStep(46, 'analyze_files'));
+      final events = parser.parseLine(_result(denied: [mcpDenied]));
+      final request = events.whereType<ApprovalRequestEvent>().single.request;
+      expect(request.id, 'agy_denied_46');
+      expect(parser.deniedRules[request.id], 'mcp(dart/analyze_files)');
+      expect(events.whereType<MessageEvent>(), isEmpty);
+
+      parser.parseLine(mcpStep(47, 'pub'));
+      parser.parseLine(_commandStep(48, 'ACTIVE', command: 'ls'));
+      final other = parser.parseLine(_result(denied: [mcpDenied]));
+      expect(
+        other.whereType<ApprovalRequestEvent>(),
+        isEmpty,
+        reason: '거부 대상을 알 수 없으면 묻지 않는다',
+      );
+      expect(
+        other.whereType<MessageEvent>().single.text,
+        contains('CallMcpTool'),
+      );
+    });
+
     testWidgets('복원한 권한 요청을 승인창에 표시하고 사용자 결정을 반환한다', (tester) async {
       parser.parseLine(_commandStep(12, 'ACTIVE', command: 'find lib'));
       final request = parser
@@ -477,6 +515,71 @@ void main() {
       final settings = args[args.indexOf('--settings') + 1];
       expect(settings, contains('find lib'));
       expect(settings, isNot(contains('rm x')));
+    });
+
+    test('자동 모드를 쓸 수 없다는 경고는 한 번만 알린다', () async {
+      const warning =
+          'warning: --mode auto is not available for this account; continuing in the default mode.';
+      spawner.processes.first.stderrCtrl
+        ..add(warning)
+        ..add(warning);
+      await _settle();
+      expect(
+        events.whereType<MessageEvent>().single.text,
+        contains('자동 모드를 쓸 수 없어'),
+      );
+      expect(events.whereType<ErrorEvent>(), isEmpty);
+    });
+
+    test('자동 모드만 자주 쓰는 명령을 미리 허용한다', () async {
+      Future<List<String>> argsFor(PermissionMode mode) async {
+        await adapter.start(
+          AgentSessionConfig(
+            sessionId: 's',
+            backendType: BackendType.antigravity,
+            workingDirectory: '/tmp',
+            permissionMode: mode,
+          ),
+        );
+        return spawner.arguments.last;
+      }
+
+      final args = await argsFor(PermissionMode.auto);
+      final allow =
+          (jsonDecode(
+                    args[args.indexOf('--settings') + 1],
+                  )['permissions']['allow']
+                  as List)
+              .cast<String>();
+      expect(allow, contains('command(git status *)'));
+      for (final rule in allow) {
+        expect(
+          rule,
+          isNot(anyOf('command(*)', contains('rm '), contains('push'))),
+        );
+        final command = rule
+            .substring('command('.length, rule.length - 1)
+            .replaceAll(' *', '');
+        expect(
+          ApprovalRequestData.detectDestructive('run_command', {
+            'CommandLine': command,
+          }),
+          isFalse,
+          reason: rule,
+        );
+      }
+      for (final mode in [
+        PermissionMode.manual,
+        PermissionMode.acceptEdits,
+        PermissionMode.plan,
+        PermissionMode.bypass,
+      ]) {
+        expect(
+          await argsFor(mode),
+          isNot(contains('--settings')),
+          reason: '$mode',
+        );
+      }
     });
 
     test('중지하면 대기 중인 거부를 버린다', () async {

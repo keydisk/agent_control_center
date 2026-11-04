@@ -204,6 +204,32 @@ void main() {
       await plain.sendPrompt('p', '요청');
       expect(own.lastConfig!.trustedDirectories, isEmpty);
     });
+
+    test('신뢰 폴더 세션에만 Git 저장소 폴더를 넘긴다', () async {
+      expect(
+        (await Process.run('git', [
+          'init',
+          '-q',
+        ], workingDirectory: trusted.path)).exitCode,
+        0,
+      );
+      await manager.sendPrompt('s', '요청');
+      expect(
+        TrustedFolderStore.canonicalPath(backend.lastConfig!.gitDirectory!),
+        TrustedFolderStore.canonicalPath('${trusted.path}/.git'),
+      );
+
+      final plain = SessionManager();
+      addTearDown(plain.dispose);
+      final own = _FakeBackend();
+      plain.createSession(
+        sessionId: 'p',
+        backendOverride: own,
+        workingDirectory: trusted.path,
+      );
+      await plain.sendPrompt('p', '요청');
+      expect(own.lastConfig!.gitDirectory, isNull);
+    });
   });
 
   group('파괴적 작업 판별', () {
@@ -227,7 +253,13 @@ void main() {
         'git branch -D feature',
         'git tag -d v1',
         'git stash drop',
-        'git worktree remove x',
+        'git worktree remove --force x',
+        'git worktree remove -f x',
+        'git branch -D feature && ls',
+        'git commit -m "\$(rm -rf x)"',
+        'echo "rm a" | sh',
+        'grep "x" a && rm b',
+        'sh -c "rm a"',
         'git push --force origin main',
         'git push -f origin main',
         'git push origin --delete feature',
@@ -263,6 +295,13 @@ void main() {
         'git worktree add x',
         'npm install',
         'grep -r delete lib',
+        'git worktree remove x',
+        'git branch -d feature',
+        'git commit -m "rm 호출 제거"',
+        'git add . && git commit -m "삭제: delete from 쿼리 수정"',
+        "git commit -m \"\$(cat <<'EOF'\nrm 호출 \"제거\"\nEOF\n)\"",
+        'grep -n "rm -rf" lib/a.dart 2>&1',
+        'rg "git clean" | head -5',
       ]) {
         expect(isDestructive(command), isFalse, reason: command);
       }
@@ -278,6 +317,30 @@ void main() {
       );
       expect(
         ApprovalRequestData.detectDestructive('delete_file', {'Path': 'a'}),
+        isTrue,
+      );
+      for (final (tool, args) in <(String, Map<String, dynamic>)>[
+        ('Agent', {'prompt': 'rm 패턴이 어디 쓰이는지 찾아줘'}),
+        ('WebSearch', {'query': 'how does git clean work'}),
+        ('TodoWrite', {'todos': 'rm -rf 제거 작업'}),
+        ('Grep', {'pattern': 'rm -rf'}),
+        ('mcp__gmail__remove_label', {'id': '1'}),
+      ]) {
+        expect(
+          ApprovalRequestData.detectDestructive(tool, args),
+          isFalse,
+          reason: tool,
+        );
+      }
+      expect(
+        ApprovalRequestData.detectDestructive('mcp__db__query', {
+          'sql': 'DROP TABLE users',
+        }),
+        isTrue,
+        reason: '실행 도구의 인자는 계속 판별한다',
+      );
+      expect(
+        ApprovalRequestData.detectDestructive('mcp__x__remove_user', {'id': 1}),
         isTrue,
       );
     });
@@ -347,6 +410,108 @@ void main() {
       expect(after(c, '--permission-mode'), 'plan');
       expect(after(a, '--mode'), 'plan');
       expect(after(x, '-s'), 'read-only');
+    });
+
+    test('Codex는 쓰기 모드에서만 Git 폴더와 네트워크를 연다', () async {
+      Future<List<String>> codexArgs(PermissionMode mode) async {
+        await codex.start(
+          AgentSessionConfig(
+            sessionId: 's',
+            backendType: BackendType.codex,
+            workingDirectory: '/tmp/wt',
+            gitDirectory: '/repo/.git',
+            permissionMode: mode,
+          ),
+        );
+        await codex.send('요청');
+        return spawner.arguments.last;
+      }
+
+      for (final mode in [PermissionMode.auto, PermissionMode.acceptEdits]) {
+        final args = await codexArgs(mode);
+        expect(after(args, '--add-dir'), '/repo/.git', reason: '$mode');
+        expect(args, contains('sandbox_workspace_write.network_access=true'));
+      }
+      for (final mode in [
+        PermissionMode.manual,
+        PermissionMode.plan,
+        PermissionMode.bypass,
+      ]) {
+        final args = await codexArgs(mode);
+        expect(args, isNot(contains('/repo/.git')), reason: '$mode');
+        expect(
+          args,
+          isNot(contains('sandbox_workspace_write.network_access=true')),
+        );
+      }
+    });
+
+    test('Codex 읽기 전용 모드는 이유를 한 번만 알린다', () async {
+      final events = <AgentEvent>[];
+      codex.events.listen(events.add);
+      await codex.start(
+        const AgentSessionConfig(
+          sessionId: 's',
+          backendType: BackendType.codex,
+          workingDirectory: '/tmp',
+        ),
+      );
+      await codex.send('하나');
+      await codex.send('둘');
+      await Future<void>.delayed(Duration.zero);
+      final notices = events.whereType<MessageEvent>().where(
+        (e) => e.role == 'system',
+      );
+      expect(notices.single.text, contains('읽기 전용'));
+    });
+
+    test('Claude 질문 답변은 원본 질문과 질문 문장 키로 보낸다', () async {
+      const input = {
+        'questions': [
+          {
+            'question': 'Pick color?',
+            'header': 'Color',
+            'options': [
+              {'label': 'Red', 'description': ''},
+              {'label': 'Blue', 'description': ''},
+            ],
+          },
+        ],
+      };
+      final events = <AgentEvent>[];
+      claude.events.listen(events.add);
+      await claude.start(
+        const AgentSessionConfig(
+          sessionId: 's',
+          backendType: BackendType.claudeCode,
+          workingDirectory: '/tmp',
+        ),
+      );
+      spawner.processes.last.stdoutCtrl.add(
+        jsonEncode({
+          'type': 'control_request',
+          'request_id': 'q1',
+          'request': {
+            'subtype': 'can_use_tool',
+            'tool_name': 'AskUserQuestion',
+            'input': input,
+          },
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+      final item = events
+          .whereType<QuestionEvent>()
+          .single
+          .request
+          .questions
+          .single;
+      await claude.respondToQuestion('q1', {
+        item.id: ['Blue'],
+      });
+      final sent = jsonDecode(spawner.processes.last.written.last) as Map;
+      final updated = sent['response']['response']['updatedInput'] as Map;
+      expect(updated['questions'], input['questions']);
+      expect(updated['answers'], {'Pick color?': 'Blue'});
     });
 
     test('건너뛰기 옵션은 권한 무시 모드에서만 쓴다', () async {

@@ -1385,6 +1385,7 @@ class SessionManager extends ChangeNotifier {
       // 컨텍스트를 압축하는 동안 사용자가 중지했을 수 있습니다.
       if (session.status != SessionStatus.running) return;
       if (!session.isStarted) {
+        final trustedDirectories = _trustedDirectories(session);
         await session.backend.start(
           AgentSessionConfig(
             sessionId: session.sessionId,
@@ -1393,7 +1394,14 @@ class SessionManager extends ChangeNotifier {
             model: session.model,
             effort: session.effort,
             conversationId: session.conversationIdToResume,
-            trustedDirectories: _trustedDirectories(session),
+            trustedDirectories: trustedDirectories,
+            gitDirectory: trustedDirectories.isEmpty
+                ? null
+                : await _gitOutput(session.effectiveDirectory, [
+                    'rev-parse',
+                    '--path-format=absolute',
+                    '--git-common-dir',
+                  ]),
             permissionMode: session.permissionMode,
             // ponytail: Codex·Antigravity는 매 턴 앞에 붙으므로 긴 컨텍스트가 반복됩니다. 비용이 문제되면 첫 턴에만 붙입니다.
             systemPromptAppend: [

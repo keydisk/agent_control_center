@@ -27,6 +27,7 @@ class CodexAdapter implements AgentBackend {
   CodexEventParser? _parser;
   AgentSessionConfig? _config;
   String? _activeThreadId;
+  bool _readOnlyNoticeShown = false;
 
   @override
   BackendType get backendType => BackendType.codex;
@@ -112,6 +113,27 @@ class CodexAdapter implements AgentBackend {
       ),
     );
 
+    final readOnly =
+        !cfg.skipsPermissions &&
+        (cfg.permissionMode == PermissionMode.manual ||
+            cfg.permissionMode == PermissionMode.plan);
+    if (readOnly && !useAppServer && !_readOnlyNoticeShown) {
+      _readOnlyNoticeShown = true;
+      _eventsController.add(
+        MessageEvent(
+          id: 'codex_read_only_${DateTime.now().microsecondsSinceEpoch}',
+          sessionId: cfg.sessionId,
+          backend: BackendType.codex,
+          model: cfg.effectiveModel,
+          timestamp: DateTime.now(),
+          role: 'system',
+          text:
+              'Codex는 실행 중에 승인을 물을 수 없어 ${cfg.permissionMode.label} 모드에서는 '
+              '읽기 전용으로 실행합니다. 파일을 고치려면 자동 또는 편집 자동 수락 모드로 바꿔 주세요.',
+        ),
+      );
+    }
+
     if (useAppServer && _process != null) {
       final rpcReq = jsonEncode({
         'jsonrpc': '2.0',
@@ -154,6 +176,17 @@ class CodexAdapter implements AgentBackend {
         },
       for (final dir in cfg.trustedDirectories)
         if (dir != cfg.workingDirectory) ...['--add-dir', dir],
+      // 샌드박스는 .git을 쓰기 금지하고 네트워크를 막아 커밋·의존성 설치·푸시가 실패합니다.
+      if (!cfg.skipsPermissions &&
+          (cfg.permissionMode == PermissionMode.auto ||
+              cfg.permissionMode == PermissionMode.acceptEdits)) ...[
+        if (cfg.gitDirectory case final gitDirectory?) ...[
+          '--add-dir',
+          gitDirectory,
+        ],
+        '-c',
+        'sandbox_workspace_write.network_access=true',
+      ],
       ...cfg.extraArgs,
       if (_activeThreadId != null && _activeThreadId!.isNotEmpty) ...[
         'resume',
@@ -247,6 +280,7 @@ class CodexAdapter implements AgentBackend {
         systemPromptAppend: config.systemPromptAppend,
         autoApproveBypassEnabled: config.autoApproveBypassEnabled,
         trustedDirectories: config.trustedDirectories,
+        gitDirectory: config.gitDirectory,
         permissionMode: config.permissionMode,
       ),
     );
