@@ -520,6 +520,8 @@ void main() {
       );
       expect(notices, hasLength(2), reason: '직접 병합은 다시 알리지 않는다');
       expect(File('${repo.path}/feature.txt').existsSync(), isTrue);
+      expect(manager.sessions, isNot(contains(child)));
+      expect(manager.activeSession, parent);
     });
 
     test('격리 실패도 요청한 세션에 실패 원인과 상태를 표시한다', () async {
@@ -1567,12 +1569,36 @@ void main() {
       expect(config.conversationId, 'conv_child');
     });
 
-    test('worktree가 사라졌으면 대화 대신 컨텍스트로 이어가고 병합 연결은 기록으로 남긴다', () async {
+    test('worktree가 사라졌으면 대화 대신 컨텍스트로 이어간다', () async {
       WorkspaceGroupStore(file: file).recordSession(
         saved(
           'a@1',
           conversationId: 'conv_a',
           worktreePath: '${temp.path}/gone',
+          worktreeLinks: [
+            WorktreeLink(
+              baseBranch: 'develop',
+              branch: 'acc/gone',
+              worktreeRoot: '${temp.path}/gone',
+              startCommit: 'aaa',
+            ),
+          ],
+        ),
+      );
+      final manager = restored();
+      final session = manager.sessions.single;
+      expect(session.effectiveDirectory, temp.path);
+      expect(session.activeWorktreeLink, isNull);
+
+      await manager.sendPrompt('a', '계속');
+      expect(created.single.lastConfig!.conversationId, isNull);
+      expect(created.single.lastConfig!.systemPromptAppend, contains('결제 구현'));
+    });
+
+    test('병합을 마친 세션은 복원하지 않고 기록에서만 찾는다', () async {
+      WorkspaceGroupStore(file: file).recordSession(
+        saved(
+          'a@1',
           worktreeLinks: [
             WorktreeLink(
               baseBranch: 'develop',
@@ -1585,14 +1611,8 @@ void main() {
         ),
       );
       final manager = restored();
-      final session = manager.sessions.single;
-      expect(session.effectiveDirectory, temp.path);
-      expect(session.activeWorktreeLink, isNull);
-      expect(session.worktreeLinks.single.mergeCommit, 'bbb');
-
-      await manager.sendPrompt('a', '계속');
-      expect(created.single.lastConfig!.conversationId, isNull);
-      expect(created.single.lastConfig!.systemPromptAppend, contains('결제 구현'));
+      expect(manager.sessions, isEmpty);
+      expect(manager.searchSavedSessions(), hasLength(1));
     });
 
     test('하위 세션을 지우면 상위 작업의 알림이 재시작 후 되살아나지 않는다', () async {
