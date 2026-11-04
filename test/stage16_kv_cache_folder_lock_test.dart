@@ -345,14 +345,14 @@ void main() {
       );
       expect(
         barByKey('provider_five_hour_bar_agy_Google Antigravity').color,
-        mac.green,
+        mac.red,
       );
       expect(mac.backendPalette.length, BackendType.values.length);
       expect(mac.backendPalette.toSet().length, BackendType.values.length);
-      expect(mac.usageLevelColor(0.49), mac.green);
+      expect(mac.usageLevelColor(0.49), mac.red);
       expect(mac.usageLevelColor(0.5), mac.orange);
       expect(mac.usageLevelColor(0.79), mac.orange);
-      expect(mac.usageLevelColor(0.8), mac.red);
+      expect(mac.usageLevelColor(0.8), mac.green);
     });
 
     testWidgets('낮고 좁은 창에서도 사이드바가 넘치지 않는다', (tester) async {

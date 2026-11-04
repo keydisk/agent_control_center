@@ -87,12 +87,12 @@ class MacColors extends ThemeExtension<MacColors> {
 
   Color backendColor(BackendType backend) => backendPalette[backend.index];
 
-  /// 한도 소진율(0~1)의 상태 색상. 많이 쓸수록 초록 → 주황 → 빨강입니다.
+  /// 한도 소진율(0~1)의 상태 색상. 많이 쓸수록 빨강 → 주황 → 초록입니다.
   Color usageLevelColor(double fraction) => fraction >= 0.8
-      ? red
+      ? green
       : fraction >= 0.5
       ? orange
-      : green;
+      : red;
 
   /// 네이티브 창의 NSVisualEffectView가 비치는 영역. macOS 외에는 불투명합니다.
   Color get sidebar => Platform.isMacOS ? Colors.transparent : codeHeader;
