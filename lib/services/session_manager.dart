@@ -213,7 +213,7 @@ class SessionManager extends ChangeNotifier {
   final bool useHelperAgent;
 
   /// 부모 세션이 없는 새 세션의 권한 모드
-  final PermissionMode defaultPermissionMode;
+  PermissionMode defaultPermissionMode;
   final void Function(
     ManagedSession parent,
     ManagedSession child,
@@ -602,6 +602,8 @@ class SessionManager extends ChangeNotifier {
         effort: session.effort,
         workingDirectory: session.workingDirectory,
         groupId: session.groupId,
+        instructions: session.instructions,
+        permissionMode: session.permissionMode,
       ),
     );
   }

@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'json_file.dart';
+
 /// 에이전트 실행을 허용한 폴더 목록을 JSON 파일로 보관합니다.
 /// 하위 폴더는 신뢰를 상속하며, 심볼릭 링크는 실제 경로로 판정합니다.
 class TrustedFolderStore {
@@ -67,8 +69,7 @@ class TrustedFolderStore {
   void _save() {
     final file = _file;
     if (file == null) return;
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(jsonEncode(_folders));
+    writeJsonAtomically(file, _folders);
   }
 
   static String _canonical(String path) {

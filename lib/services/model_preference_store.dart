@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../core/models/agent_models.dart';
+import 'json_file.dart';
 
 /// 백엔드별로 마지막에 선택한 모델을 보관합니다.
 class ModelPreferenceStore {
@@ -48,12 +49,9 @@ class ModelPreferenceStore {
     final file = _file;
     if (file == null) return;
     try {
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(
-        jsonEncode({
-          for (final entry in _models.entries) entry.key.id: entry.value,
-        }),
-      );
+      writeJsonAtomically(file, {
+        for (final entry in _models.entries) entry.key.id: entry.value,
+      });
     } on FileSystemException catch (_) {
       // 저장에 실패해도 이번 실행의 모델 변경은 막지 않습니다.
     }

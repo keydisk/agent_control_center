@@ -1,12 +1,14 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/models/agent_models.dart';
 import '../core/models/permission_models.dart';
 import '../core/permission_store.dart';
 
+import 'json_file.dart';
 import 'storage_service.dart';
 
 export '../core/models/permission_models.dart';
@@ -80,10 +82,14 @@ class PermissionCenter extends ChangeNotifier {
 
   factory PermissionCenter.load() {
     final home = Platform.environment['HOME'];
+    if (home == null) return PermissionCenter();
+    final dir = Directory('$home/.agent_control_center')
+      ..createSync(recursive: true);
     return PermissionCenter(
-      osPermissionFile: home == null
-          ? null
-          : File('$home/.agent_control_center/os_permissions.json'),
+      database: AppDriftDatabase(
+        NativeDatabase(File('${dir.path}/acc_database.sqlite')),
+      ),
+      osPermissionFile: File('${dir.path}/os_permissions.json'),
     );
   }
 
@@ -219,13 +225,10 @@ class PermissionCenter extends ChangeNotifier {
     final file = _osPermissionFile;
     if (file == null) return;
     try {
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(
-        jsonEncode([
-          for (final e in _osPermissions.entries)
-            if (e.value == ApprovalScope.always) e.key.id,
-        ]),
-      );
+      writeJsonAtomically(file, [
+        for (final e in _osPermissions.entries)
+          if (e.value == ApprovalScope.always) e.key.id,
+      ]);
     } on FileSystemException catch (_) {
       // 저장에 실패해도 이번 실행의 권한 변경은 막지 않습니다.
     }
