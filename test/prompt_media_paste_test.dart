@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:agent_control_center/adapters/codex/codex_adapter.dart';
 import 'package:agent_control_center/core/backend/agent_backend.dart';
 import 'package:agent_control_center/core/models/agent_models.dart';
@@ -111,6 +113,44 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(_promptText(tester), '복사한 글');
+      expect(find.byType(InputChip), findsNothing);
+    },
+    variant: _macOnly,
+  );
+
+  testWidgets(
+    '긴 텍스트는 파일로 첨부하고 파일만 전송할 수 있다',
+    (tester) async {
+      final content = '긴 내용\n' * 200;
+      String? sentPrompt;
+      List<String>? sentFiles;
+      _mockPasteboard(tester, []);
+      _mockClipboardText(tester, content);
+      await _pumpBar(tester, onSubmit: (prompt, files) {
+        sentPrompt = prompt;
+        sentFiles = files;
+      });
+
+      await tester.runAsync(() async {
+        final result = Actions.invoke(
+          tester.element(find.byKey(const ValueKey('prompt_textfield'))),
+          const PasteTextIntent(SelectionChangedCause.keyboard),
+        );
+        if (result is Future) await result;
+      });
+      await tester.pump();
+
+      expect(_promptText(tester), isEmpty);
+      final key = tester.widget<InputChip>(find.byType(InputChip)).key!
+          as ValueKey<String>;
+      final file = File(key.value.substring('attachment_chip_'.length));
+      addTearDown(() => file.parent.deleteSync(recursive: true));
+      expect(file.readAsStringSync(), content);
+
+      await tester.tap(find.byKey(const ValueKey('send_button')));
+      await tester.pump();
+      expect(sentPrompt, '첨부 파일을 확인해 줘.');
+      expect(sentFiles, [file.path]);
       expect(find.byType(InputChip), findsNothing);
     },
     variant: _macOnly,

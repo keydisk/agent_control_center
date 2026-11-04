@@ -160,24 +160,26 @@ bool _isChipOnlyImage(String path) => const {
   '.bmp',
 }.contains(p.extension(path).toLowerCase());
 
-/// 미디어 붙여넣기를 먼저 시도하고, 없으면 기본 텍스트 붙여넣기로 넘깁니다.
-class _PasteMediaAction extends Action<PasteTextIntent> {
-  _PasteMediaAction(this.attachPastedMedia);
+/// 첨부할 내용을 먼저 처리하고, 없으면 기본 텍스트 붙여넣기로 넘깁니다.
+class _PasteAttachmentAction extends Action<PasteTextIntent> {
+  _PasteAttachmentAction(this.attachPastedContent);
 
-  final Future<bool> Function() attachPastedMedia;
+  final Future<bool> Function() attachPastedContent;
 
   @override
   Future<void> invoke(PasteTextIntent intent) async {
     // callingAction은 동기 구간에서만 유효하므로 await 전에 잡아 둡니다.
     final pasteText = callingAction;
-    if (!await attachPastedMedia()) pasteText?.invoke(intent);
+    if (!await attachPastedContent()) pasteText?.invoke(intent);
   }
 }
 
 class _PromptInputBarState extends State<PromptInputBar> {
   final TextEditingController _controller = TextEditingController();
   late final FocusNode _focusNode = FocusNode(onKeyEvent: _onPromptKeyEvent);
-  late final _pasteMediaAction = _PasteMediaAction(_attachPastedMedia);
+  late final _pasteAttachmentAction = _PasteAttachmentAction(
+    _attachPastedContent,
+  );
   final List<String> _attachments = [];
   String _lastText = '';
   int _highlightedIndex = 0;
@@ -442,24 +444,25 @@ class _PromptInputBarState extends State<PromptInputBar> {
 
   void _handleSend() {
     final text = _controller.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _attachments.isEmpty) return;
     final attached = List<String>.from(_attachments);
     _controller.clear();
     setState(() {
       _attachments.clear();
     });
-    widget.onSubmit(text, attached);
+    widget.onSubmit(text.isEmpty ? '첨부 파일을 확인해 줘.' : text, attached);
   }
 
-  /// 클립보드의 사진·영상을 첨부합니다. 첨부할 것이 없으면 false를 돌려줍니다.
-  Future<bool> _attachPastedMedia() async {
-    final List<String> paths;
+  /// 클립보드의 사진·영상 또는 긴 텍스트를 첨부합니다.
+  Future<bool> _attachPastedContent() async {
+    List<String> paths;
     try {
       paths =
           await _pasteboardChannel.invokeListMethod<String>('readMediaPaths') ??
           const [];
     } on MissingPluginException {
-      return false; // macOS 외 플랫폼은 텍스트만 붙여넣습니다.
+      // macOS 외 플랫폼에서도 긴 텍스트는 파일로 첨부합니다.
+      paths = const [];
     }
     if (!mounted) return true;
     final media = paths.where(
@@ -468,11 +471,30 @@ class _PromptInputBarState extends State<PromptInputBar> {
           _isVideoAttachment(path) ||
           _isChipOnlyImage(path),
     );
-    if (media.isEmpty) return false;
-    setState(() {
-      _attachments.addAll(media.where((path) => !_attachments.contains(path)));
-    });
-    return true;
+    if (media.isNotEmpty) {
+      setState(() {
+        _attachments.addAll(
+          media.where((path) => !_attachments.contains(path)),
+        );
+      });
+      return true;
+    }
+
+    try {
+      final text = (await Clipboard.getData('text/plain'))?.text;
+      if (text == null || text.length < 1000) return false;
+      // shortcut: 임시 파일 정리는 OS에 맡깁니다. 영구 첨부가 필요하면 앱 저장소로 옮깁니다.
+      final directory = await Directory.systemTemp.createTemp(
+        'agent-control-center-paste-',
+      );
+      final file = File(p.join(directory.path, 'pasted-text.txt'));
+      await file.writeAsString(text);
+      if (!mounted) return true;
+      setState(() => _attachments.add(file.path));
+      return true;
+    } on Exception {
+      return false;
+    }
   }
 
   Future<void> _showAddAttachmentDialog() async {
@@ -588,7 +610,7 @@ class _PromptInputBarState extends State<PromptInputBar> {
                 children: [
                   if (_attachments.isNotEmpty) _buildAttachments(),
                   Actions(
-                    actions: {PasteTextIntent: _pasteMediaAction},
+                    actions: {PasteTextIntent: _pasteAttachmentAction},
                     child: TextField(
                       key: const ValueKey('prompt_textfield'),
                       controller: _controller,
