@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../core/models/agent_models.dart';
 import '../../services/effort_preference_store.dart';
@@ -69,6 +70,7 @@ class _FolderField extends StatelessWidget {
     this.enabled = true,
     this.errorText,
     this.onChanged,
+    this.focusNode,
   });
 
   final TextEditingController controller;
@@ -77,6 +79,7 @@ class _FolderField extends StatelessWidget {
   final bool enabled;
   final String? errorText;
   final ValueChanged<String>? onChanged;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
@@ -87,6 +90,7 @@ class _FolderField extends StatelessWidget {
           child: TextField(
             key: fieldKey,
             controller: controller,
+            focusNode: focusNode,
             enabled: enabled,
             onChanged: onChanged,
             decoration: InputDecoration(
@@ -122,18 +126,21 @@ class _InstructionsField extends StatelessWidget {
     required this.fieldKey,
     required this.label,
     this.helper,
+    this.focusNode,
   });
 
   final TextEditingController controller;
   final Key fieldKey;
   final String label;
   final String? helper;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
     return TextField(
       key: fieldKey,
       controller: controller,
+      focusNode: focusNode,
       minLines: 2,
       maxLines: 5,
       style: const TextStyle(fontSize: 13),
@@ -187,15 +194,18 @@ class _ModelDropdown extends StatelessWidget {
     required this.backend,
     required this.value,
     required this.onChanged,
+    this.focusNode,
   });
 
   final BackendType backend;
   final String value;
   final ValueChanged<String>? onChanged;
+  final FocusNode? focusNode;
 
   @override
   Widget build(BuildContext context) {
     return DropdownButtonFormField<String>(
+      focusNode: focusNode,
       // 백엔드가 바뀌면 목록과 선택값을 새로 초기화합니다.
       key: ValueKey('session_model_${backend.id}'),
       initialValue: value,
@@ -254,6 +264,78 @@ class _EffortDropdown extends StatelessWidget {
   }
 }
 
+class _CreationShortcuts extends StatefulWidget {
+  const _CreationShortcuts({
+    required this.onSubmit,
+    required this.modelFocus,
+    required this.folderFocus,
+    required this.instructionsFocus,
+    required this.child,
+  });
+
+  final VoidCallback onSubmit;
+  final FocusNode modelFocus;
+  final FocusNode folderFocus;
+  final FocusNode instructionsFocus;
+  final Widget child;
+
+  @override
+  State<_CreationShortcuts> createState() => _CreationShortcutsState();
+}
+
+class _CreationShortcutsState extends State<_CreationShortcuts> {
+  @override
+  void initState() {
+    super.initState();
+    HardwareKeyboard.instance.addHandler(_onKeyEvent);
+  }
+
+  @override
+  void dispose() {
+    HardwareKeyboard.instance.removeHandler(_onKeyEvent);
+    super.dispose();
+  }
+
+  bool _onKeyEvent(KeyEvent event) {
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    final keyboard = HardwareKeyboard.instance;
+    if (SingleActivator(
+      LogicalKeyboardKey.enter,
+      meta: Platform.isMacOS,
+      control: !Platform.isMacOS,
+    ).accepts(event, keyboard)) {
+      widget.onSubmit();
+    } else if (const SingleActivator(LogicalKeyboardKey.escape)
+        .accepts(event, keyboard)) {
+      Navigator.of(context).pop();
+    } else if (const SingleActivator(
+      LogicalKeyboardKey.keyM,
+      control: true,
+      shift: true,
+    ).accepts(event, keyboard)) {
+      widget.modelFocus.requestFocus();
+    } else if (const SingleActivator(
+      LogicalKeyboardKey.keyF,
+      control: true,
+      shift: true,
+    ).accepts(event, keyboard)) {
+      widget.folderFocus.requestFocus();
+    } else if (const SingleActivator(
+      LogicalKeyboardKey.keyI,
+      control: true,
+      shift: true,
+    ).accepts(event, keyboard)) {
+      widget.instructionsFocus.requestFocus();
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// 백엔드와 작업 폴더를 지정해 세션을 만듭니다. 지정한 폴더는 신뢰 목록에 추가됩니다.
 class NewSessionDialog extends StatefulWidget {
   const NewSessionDialog({
@@ -295,6 +377,9 @@ class NewSessionDialog extends StatefulWidget {
 
 class _NewSessionDialogState extends State<NewSessionDialog> {
   final _nameCtrl = TextEditingController();
+  final _modelFocus = FocusNode();
+  final _folderFocus = FocusNode();
+  final _instructionsFocus = FocusNode();
   late final _folderCtrl = TextEditingController(text: widget.initialFolder);
   late final _instructionsCtrl = TextEditingController(
     text: widget.initialInstructions,
@@ -318,6 +403,9 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
     _nameCtrl.dispose();
     _folderCtrl.dispose();
     _instructionsCtrl.dispose();
+    _modelFocus.dispose();
+    _folderFocus.dispose();
+    _instructionsFocus.dispose();
     super.dispose();
   }
 
@@ -349,7 +437,15 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _CreationShortcuts(
+    onSubmit: _create,
+    modelFocus: _modelFocus,
+    folderFocus: _folderFocus,
+    instructionsFocus: _instructionsFocus,
+    child: _dialog(context),
+  );
+
+  Widget _dialog(BuildContext context) {
     return AlertDialog(
       key: const ValueKey('new_session_dialog'),
       scrollable: true,
@@ -381,6 +477,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             ),
             const SizedBox(height: 12),
             _ModelDropdown(
+              focusNode: _modelFocus,
               backend: _backend,
               value: _model,
               onChanged: (m) => setState(() => _model = m),
@@ -393,6 +490,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             ),
             const SizedBox(height: 12),
             _FolderField(
+              focusNode: _folderFocus,
               fieldKey: const ValueKey('new_session_folder'),
               controller: _folderCtrl,
               enabled: !widget.lockFolder,
@@ -413,6 +511,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             if (widget.showInstructions) ...[
               const SizedBox(height: 12),
               _InstructionsField(
+                focusNode: _instructionsFocus,
                 fieldKey: const ValueKey('new_session_instructions'),
                 controller: _instructionsCtrl,
                 label: '세션별 지침 (선택)',
@@ -507,6 +606,9 @@ class WorkspaceGroupDialog extends StatefulWidget {
 }
 
 class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
+  final _modelFocus = FocusNode();
+  final _folderFocus = FocusNode();
+  final _instructionsFocus = FocusNode();
   late final _nameCtrl = TextEditingController(text: widget.group?.name);
   late final _folderCtrl = TextEditingController(
     text: widget.group?.folder ?? widget.initialFolder,
@@ -536,6 +638,9 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
     _folderCtrl.dispose();
     _defaultCtrl.dispose();
     _extraCtrl.dispose();
+    _modelFocus.dispose();
+    _folderFocus.dispose();
+    _instructionsFocus.dispose();
     super.dispose();
   }
 
@@ -573,7 +678,15 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => _CreationShortcuts(
+    onSubmit: _save,
+    modelFocus: _modelFocus,
+    folderFocus: _folderFocus,
+    instructionsFocus: _instructionsFocus,
+    child: _dialog(context),
+  );
+
+  Widget _dialog(BuildContext context) {
     return AlertDialog(
       key: const ValueKey('workspace_group_dialog'),
       title: Text(widget.group == null ? '작업 그룹 만들기' : '작업 그룹 설정'),
@@ -594,6 +707,7 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
               ),
               const SizedBox(height: 12),
               _FolderField(
+                focusNode: _folderFocus,
                 fieldKey: const ValueKey('group_folder'),
                 controller: _folderCtrl,
                 label: '신뢰 폴더',
@@ -612,6 +726,7 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
               ),
               const SizedBox(height: 12),
               _ModelDropdown(
+                focusNode: _modelFocus,
                 backend: _backend,
                 value: _model,
                 onChanged: (m) => setState(() => _model = m),
@@ -641,6 +756,7 @@ class _WorkspaceGroupDialogState extends State<WorkspaceGroupDialog> {
                 const SizedBox(height: 12),
               ],
               _InstructionsField(
+                focusNode: _instructionsFocus,
                 fieldKey: const ValueKey('group_extra_instructions'),
                 controller: _extraCtrl,
                 label: _useDefault ? '추가 지침 (선택)' : '그룹 지침 (선택)',
