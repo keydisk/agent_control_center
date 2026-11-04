@@ -6,6 +6,7 @@ import '../theme/mac_theme.dart';
 import 'session_dialogs.dart';
 
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
 
 import '../../core/models/agent_models.dart';
 import '../../services/skill_registry.dart';
@@ -139,9 +140,44 @@ class _PermissionModeMenu extends StatelessWidget {
   }
 }
 
+const _pasteboardChannel = MethodChannel('agent_control_center/pasteboard');
+
+bool _isVideoAttachment(String path) => const {
+  '.mp4',
+  '.mov',
+  '.m4v',
+  '.webm',
+  '.mkv',
+  '.avi',
+}.contains(p.extension(path).toLowerCase());
+
+/// 썸네일 없이 칩으로 표시하지만 붙여넣기로 첨부할 수 있는 이미지 형식
+bool _isChipOnlyImage(String path) => const {
+  '.heic',
+  '.heif',
+  '.tif',
+  '.tiff',
+  '.bmp',
+}.contains(p.extension(path).toLowerCase());
+
+/// 미디어 붙여넣기를 먼저 시도하고, 없으면 기본 텍스트 붙여넣기로 넘깁니다.
+class _PasteMediaAction extends Action<PasteTextIntent> {
+  _PasteMediaAction(this.attachPastedMedia);
+
+  final Future<bool> Function() attachPastedMedia;
+
+  @override
+  Future<void> invoke(PasteTextIntent intent) async {
+    // callingAction은 동기 구간에서만 유효하므로 await 전에 잡아 둡니다.
+    final pasteText = callingAction;
+    if (!await attachPastedMedia()) pasteText?.invoke(intent);
+  }
+}
+
 class _PromptInputBarState extends State<PromptInputBar> {
   final TextEditingController _controller = TextEditingController();
   late final FocusNode _focusNode = FocusNode(onKeyEvent: _onPromptKeyEvent);
+  late final _pasteMediaAction = _PasteMediaAction(_attachPastedMedia);
   final List<String> _attachments = [];
   String _lastText = '';
   int _highlightedIndex = 0;
@@ -415,6 +451,30 @@ class _PromptInputBarState extends State<PromptInputBar> {
     widget.onSubmit(text, attached);
   }
 
+  /// 클립보드의 사진·영상을 첨부합니다. 첨부할 것이 없으면 false를 돌려줍니다.
+  Future<bool> _attachPastedMedia() async {
+    final List<String> paths;
+    try {
+      paths =
+          await _pasteboardChannel.invokeListMethod<String>('readMediaPaths') ??
+          const [];
+    } on MissingPluginException {
+      return false; // macOS 외 플랫폼은 텍스트만 붙여넣습니다.
+    }
+    if (!mounted) return true;
+    final media = paths.where(
+      (path) =>
+          isImageAttachment(path) ||
+          _isVideoAttachment(path) ||
+          _isChipOnlyImage(path),
+    );
+    if (media.isEmpty) return false;
+    setState(() {
+      _attachments.addAll(media.where((path) => !_attachments.contains(path)));
+    });
+    return true;
+  }
+
   Future<void> _showAddAttachmentDialog() async {
     final pathCtrl = TextEditingController();
     final added = await showDialog<String>(
@@ -514,31 +574,6 @@ class _PromptInputBarState extends State<PromptInputBar> {
           // 슬래시 명령·스킬 자동완성 팝업 바
           _buildSlashSuggestions(),
 
-          // 첨부 파일 목록
-          if (_attachments.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Wrap(
-                spacing: 6,
-                runSpacing: 4,
-                children: [
-                  for (final file in _attachments)
-                    InputChip(
-                      avatar: const Icon(Icons.attach_file, size: 14),
-                      label: Text(
-                        file.split('/').last,
-                        style: const TextStyle(fontSize: 11.5),
-                      ),
-                      onDeleted: () {
-                        setState(() {
-                          _attachments.remove(file);
-                        });
-                      },
-                    ),
-                ],
-              ),
-            ),
-
           // 입력창과 제어 버튼을 묶은 작성 영역
           DecoratedBox(
             decoration: BoxDecoration(
@@ -551,22 +586,26 @@ class _PromptInputBarState extends State<PromptInputBar> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  TextField(
-                    key: const ValueKey('prompt_textfield'),
-                    controller: _controller,
-                    focusNode: _focusNode,
-                    minLines: 1,
-                    maxLines: 6,
-                    decoration: InputDecoration(
-                      hintText:
-                          '에이전트에게 작업을 지시하세요... ("/" 자동완성 · $_sendShortcutLabel 전송)',
-                      filled: false,
-                      border: InputBorder.none,
-                      enabledBorder: InputBorder.none,
-                      focusedBorder: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 8,
+                  if (_attachments.isNotEmpty) _buildAttachments(),
+                  Actions(
+                    actions: {PasteTextIntent: _pasteMediaAction},
+                    child: TextField(
+                      key: const ValueKey('prompt_textfield'),
+                      controller: _controller,
+                      focusNode: _focusNode,
+                      minLines: 1,
+                      maxLines: 6,
+                      decoration: InputDecoration(
+                        hintText:
+                            '에이전트에게 작업을 지시하세요... ("/" 자동완성 · $_sendShortcutLabel 전송)',
+                        filled: false,
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 4,
+                          vertical: 8,
+                        ),
                       ),
                     ),
                   ),
@@ -589,6 +628,83 @@ class _PromptInputBarState extends State<PromptInputBar> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// 입력창 상단의 첨부 목록. 이미지는 썸네일, 나머지는 파일명 칩으로 표시합니다.
+  Widget _buildAttachments() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 6, 4, 2),
+      child: Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          for (final file in _attachments)
+            if (isImageAttachment(file))
+              _buildImagePreview(file)
+            else
+              InputChip(
+                key: ValueKey('attachment_chip_$file'),
+                avatar: Icon(
+                  _isVideoAttachment(file)
+                      ? Icons.videocam_outlined
+                      : Icons.attach_file,
+                  size: 14,
+                ),
+                label: Text(
+                  p.basename(file),
+                  style: const TextStyle(fontSize: 11.5),
+                ),
+                onDeleted: () => setState(() => _attachments.remove(file)),
+              ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImagePreview(String file) {
+    return Tooltip(
+      key: ValueKey('attachment_image_$file'),
+      message: p.basename(file),
+      child: SizedBox.square(
+        dimension: 64,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(file),
+                fit: BoxFit.cover,
+                cacheWidth: 128,
+                errorBuilder: (_, _, _) =>
+                    const Icon(Icons.broken_image_outlined),
+              ),
+            ),
+            Positioned(
+              top: 2,
+              right: 2,
+              child: IconButton(
+                key: ValueKey('attachment_remove_$file'),
+                tooltip: '첨부 제거',
+                onPressed: () => setState(() => _attachments.remove(file)),
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 20,
+                  height: 20,
+                ),
+                iconSize: 12,
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.black54,
+                  foregroundColor: Colors.white,
+                ),
+                icon: const Icon(Icons.close),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

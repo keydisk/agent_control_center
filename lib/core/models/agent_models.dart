@@ -1,5 +1,16 @@
 import 'dart:convert';
 
+import 'package:path/path.dart' as p;
+
+/// 입력창 미리보기와 Codex `--image`가 처리할 수 있는 이미지인지 확인합니다.
+bool isImageAttachment(String path) => const {
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+}.contains(p.extension(path).toLowerCase());
+
 enum TargetDeviceType {
   macosDesktop(id: 'macos', label: 'macOS (Desktop)'),
   iosDeviceOrSim(id: 'ios', label: 'iOS (iPhone / iPad / Simulator)'),
