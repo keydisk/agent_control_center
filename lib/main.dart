@@ -389,7 +389,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     }
   }
 
-  Future<void> _openSavedSession(SessionSnapshot snapshot) async {
+  Future<void> _openSavedSession(
+    SessionSnapshot snapshot,
+    String? groupId,
+  ) async {
     final session = _sessionManager.createSession(
       title: snapshot.title,
       backendType: snapshot.backend,
@@ -398,11 +401,9 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       workingDirectory: snapshot.workingDirectory.isEmpty
           ? Directory.current.path
           : snapshot.workingDirectory,
-      groupId: _sessionManager.groups?.groupById(snapshot.groupId) == null
-          ? null
-          : snapshot.groupId,
+      groupId: groupId,
     );
-    await _sessionManager.loadSnapshot(session.sessionId, snapshot);
+    await _sessionManager.reopenSnapshot(session.sessionId, snapshot);
   }
 
   Future<void> _openChildSessionDialog(String parentSessionId) async {

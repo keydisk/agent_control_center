@@ -1,6 +1,7 @@
 import 'dart:math' show max;
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../theme/mac_theme.dart';
 
@@ -53,7 +54,8 @@ class MultiSessionSidebar extends StatelessWidget {
   final void Function(String sessionId, BackendType backend) onRerunWithBackend;
   final ValueChanged<String> onIsolateWorktree;
   final List<SessionSnapshot> savedSessions;
-  final ValueChanged<SessionSnapshot>? onOpenSavedSession;
+  final void Function(SessionSnapshot snapshot, String? groupId)?
+  onOpenSavedSession;
   final TargetDeviceType selectedDevice;
   final ValueChanged<TargetDeviceType>? onDeviceChanged;
   final bool autoOrchestrateByAntigravity;
@@ -110,6 +112,38 @@ class MultiSessionSidebar extends StatelessWidget {
       ),
   ];
 
+  /// 저장된 그룹을 따르고, 그룹 없는 기록은 같은 폴더의 그룹에 넣습니다.
+  String? _groupIdOf(SessionSnapshot snapshot) {
+    final all = groups ?? const <WorkspaceGroup>[];
+    if (all.any((g) => g.id == snapshot.groupId)) return snapshot.groupId;
+    for (final group in all) {
+      if (p.equals(group.folder, snapshot.workingDirectory)) return group.id;
+    }
+    return null;
+  }
+
+  List<Widget> _savedRows(String? groupId) => [
+    for (final snapshot in savedSessions)
+      if (_groupIdOf(snapshot) == groupId)
+        ListTile(
+          key: ValueKey('saved_session_${snapshot.id}'),
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          leading: const Icon(Icons.history, size: 16),
+          title: Text(
+            snapshot.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Text(
+            snapshot.backend.displayName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          onTap: () => onOpenSavedSession?.call(snapshot, groupId),
+        ),
+  ];
+
   @override
   Widget build(BuildContext context) {
     final mac = context.mac;
@@ -151,9 +185,12 @@ class MultiSessionSidebar extends StatelessWidget {
                       onNewSession: () => onNewSessionInGroup?.call(group.id),
                       onEdit: () => onEditGroup?.call(group.id),
                       onDelete: () => onDeleteGroup?.call(group.id),
-                      children: _sessionRows(
-                        sessions.where((s) => s.groupId == group.id).toList(),
-                      ),
+                      children: [
+                        ..._sessionRows(
+                          sessions.where((s) => s.groupId == group.id).toList(),
+                        ),
+                        ..._savedRows(group.id),
+                      ],
                     ),
                   const SizedBox(height: 8),
                 ],
@@ -163,28 +200,7 @@ class MultiSessionSidebar extends StatelessWidget {
                       .where((s) => !groupIds.contains(s.groupId))
                       .toList(),
                 ),
-                if (savedSessions.isNotEmpty) ...[
-                  const SizedBox(height: 12),
-                  const _SidebarSectionLabel('이전 작업'),
-                  for (final snapshot in savedSessions)
-                    ListTile(
-                      key: ValueKey('saved_session_${snapshot.id}'),
-                      dense: true,
-                      visualDensity: VisualDensity.compact,
-                      leading: const Icon(Icons.history, size: 16),
-                      title: Text(
-                        snapshot.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      subtitle: Text(
-                        snapshot.backend.displayName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: () => onOpenSavedSession?.call(snapshot),
-                    ),
-                ],
+                ..._savedRows(null),
               ],
             ),
           ),

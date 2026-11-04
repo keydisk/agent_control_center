@@ -730,7 +730,7 @@ void main() {
       );
       await pumpHome(tester);
 
-      expect(find.text('이전 작업'), findsOneWidget);
+      expect(find.text('이전 작업'), findsNothing);
       await tap(tester, 'saved_session_previous');
 
       expect(manager.sessions, hasLength(2));
@@ -742,6 +742,47 @@ void main() {
         hasLength(2),
       );
       expect(manager.sessions.first.title, '현재 작업');
+    });
+
+    testWidgets('이전 작업은 그룹 안에 표시되고 열면 그룹 세션으로 옮겨진다', (tester) async {
+      SessionSnapshot saved(String id, {String? groupId, String? folder}) =>
+          SessionSnapshot(
+            id: id,
+            title: id,
+            backend: BackendType.claudeCode,
+            lastTurn: '사용자: 질문\n에이전트: 답변',
+            updatedAt: DateTime.now(),
+            workingDirectory: folder ?? temp.path,
+            groupId: groupId,
+          );
+      Finder inGroup(String key) => find.descendant(
+        of: find.byKey(const ValueKey('group_tile_g1')),
+        matching: find.byKey(ValueKey(key)),
+      );
+
+      store
+        ..upsert(_group(folder: temp.path))
+        ..recordSession(saved('same_group', groupId: 'g1'))
+        ..recordSession(saved('same_folder'))
+        ..recordSession(saved('other_folder', folder: '${temp.path}/other'));
+      await pumpHome(tester);
+
+      expect(inGroup('saved_session_same_group'), findsOneWidget);
+      expect(inGroup('saved_session_same_folder'), findsOneWidget);
+      expect(inGroup('saved_session_other_folder'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('saved_session_other_folder')),
+        findsOneWidget,
+      );
+
+      await tap(tester, 'saved_session_same_folder');
+
+      expect(manager.activeSession!.groupId, 'g1');
+      expect(find.byKey(const ValueKey('saved_session_same_folder')), findsNothing);
+      expect(
+        store.searchSessions('', 50).where((s) => s.title == 'same_folder'),
+        hasLength(1),
+      );
     });
 
     testWidgets('그룹을 만들면 폴더를 신뢰하고 작업 세션 위에 표시한다', (tester) async {
