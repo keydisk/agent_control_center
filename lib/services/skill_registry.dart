@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/models/agent_models.dart';
+import 'app_settings_store.dart';
 import 'session_context.dart';
 
 class SkillDefinition {
@@ -43,12 +44,15 @@ class SkillRegistry extends ChangeNotifier {
   SkillRegistry({
     Map<BackendType, String>? backendSkillDirs,
     bool loadDefaults = true,
+    this.settings,
   }) : _backendSkillDirs = backendSkillDirs ?? _defaultBackendSkillDirs() {
     if (loadDefaults) {
       _registerBuiltInCoreSkills();
     }
   }
 
+  /// null이면 스킬 켜기/끄기를 기억하지 않습니다.
+  final AppSettingsStore? settings;
   final Map<BackendType, String> _backendSkillDirs;
   final Map<String, SkillDefinition> _skills = {};
 
@@ -110,6 +114,7 @@ class SkillRegistry extends ChangeNotifier {
   }
 
   void registerSkill(SkillDefinition skill) {
+    if (settings?.isSkillDisabled(skill.name) ?? false) skill.isEnabled = false;
     _skills[skill.name] = skill;
     notifyListeners();
   }
@@ -118,6 +123,7 @@ class SkillRegistry extends ChangeNotifier {
     final s = _skills[name];
     if (s == null) return;
     s.isEnabled = enabled;
+    settings?.setSkillDisabled(name, !enabled);
     notifyListeners();
   }
 

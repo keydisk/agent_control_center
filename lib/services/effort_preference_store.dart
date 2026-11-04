@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../core/models/agent_models.dart';
+import 'json_file.dart';
 
 /// 백엔드별로 마지막에 고른 추론 강도를 JSON 파일로 보관합니다.
 class EffortPreferenceStore {
@@ -45,10 +46,9 @@ class EffortPreferenceStore {
     final file = _file;
     if (file == null) return;
     try {
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(
-        jsonEncode({for (final e in _efforts.entries) e.key.id: e.value.name}),
-      );
+      writeJsonAtomically(file, {
+        for (final e in _efforts.entries) e.key.id: e.value.name,
+      });
     } on FileSystemException catch (_) {
       // 저장에 실패해도 이번 실행의 강도 변경은 막지 않습니다.
     }

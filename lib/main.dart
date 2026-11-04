@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 
 import 'core/backend/agent_backend.dart';
 import 'core/models/agent_models.dart';
+import 'services/app_settings_store.dart';
 import 'services/effort_preference_store.dart';
 import 'services/model_preference_store.dart';
 import 'services/inbox_service.dart';
@@ -18,6 +19,7 @@ import 'services/notification_service.dart';
 import 'services/permission_center.dart';
 import 'services/provider_usage_service.dart';
 import 'services/session_manager.dart';
+import 'services/skill_registry.dart';
 import 'services/trusted_folder_store.dart';
 import 'services/workspace_group_store.dart';
 import 'ui/screens/inbox_screen.dart';
@@ -59,6 +61,7 @@ class ControlCenterHomeScreen extends StatefulWidget {
     this.sessionManagerOverride,
     this.inboxServiceOverride,
     this.notificationServiceOverride,
+    this.settingsOverride,
     this.initialEvents = const [],
     this.initialRawLogs = const [],
     this.initialInstallStatuses = const {},
@@ -68,6 +71,7 @@ class ControlCenterHomeScreen extends StatefulWidget {
   final SessionManager? sessionManagerOverride;
   final InboxService? inboxServiceOverride;
   final NotificationService? notificationServiceOverride;
+  final AppSettingsStore? settingsOverride;
   final List<AgentEvent> initialEvents;
   final List<String> initialRawLogs;
   final Map<BackendType, BackendInstallationStatus> initialInstallStatuses;
@@ -83,11 +87,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
   late final InboxService _inboxService;
   late final bool _ownsSessionManager;
   late final bool _ownsInboxService;
+  late final AppSettingsStore _settings;
   StreamSubscription<NotificationDeepLink>? _deepLinkSub;
-  bool _showRawLogs = false;
-  bool _showSessionSidebar = true;
-  bool _showKvCachePanel = true;
-  TargetDeviceType _selectedDevice = TargetDeviceType.macosDesktop;
+  late bool _showRawLogs;
+  late bool _showSessionSidebar;
+  late bool _showKvCachePanel;
+  late TargetDeviceType _selectedDevice;
   final Map<BackendType, BackendInstallationStatus> _installStatuses = {};
   final ScrollController _timelineScroll = ScrollController();
   final ProviderUsageService _providerUsageService =
@@ -123,6 +128,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     _installStatuses.addAll(widget.initialInstallStatuses);
     final usesRealEnvironment =
         widget.backendOverride == null && widget.sessionManagerOverride == null;
+    _settings =
+        widget.settingsOverride ??
+        (usesRealEnvironment ? AppSettingsStore.load() : AppSettingsStore());
+    _showRawLogs = _settings.showRawLogs;
+    _showSessionSidebar = _settings.showSessionSidebar;
+    _showKvCachePanel = _settings.showKvCachePanel;
+    _selectedDevice = _settings.device;
     _notificationService =
         widget.notificationServiceOverride ??
         NotificationService(enableOsPlugin: usesRealEnvironment);
@@ -139,9 +151,11 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
         effortPreferences: guarded ? EffortPreferenceStore.load() : null,
         modelPreferences: guarded ? ModelPreferenceStore.load() : null,
         groups: guarded ? WorkspaceGroupStore.load() : null,
+        skillRegistry: SkillRegistry(settings: _settings),
+        autoOrchestrateByAntigravity: _settings.autoOrchestrate,
         useHelperAgent: guarded,
         defaultPermissionMode: guarded
-            ? PermissionMode.auto
+            ? _settings.permissionMode ?? PermissionMode.auto
             : PermissionMode.manual,
         autoIsolateWithWorktree: guarded,
         onFolderTrustRequired: _confirmFolderTrust,
@@ -190,6 +204,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           );
         },
       );
+      _sessionManager.permissionCenter.loadFromDatabase().ignore();
       _sessionManager.skillRegistry.discoverLocalSkills().ignore();
       final home = Platform.environment['HOME'];
       if (guarded && home != null) {
@@ -217,8 +232,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     if (_sessionManager.sessions.isEmpty) {
       _sessionManager.createSession(
         sessionId: 'session_1',
-        backendType: BackendType.antigravity,
-        workingDirectory: Directory.current.path,
+        backendType: _settings.backend ?? BackendType.antigravity,
+        workingDirectory: _settings.workingDirectory ?? Directory.current.path,
         backendOverride: widget.backendOverride,
         initialEvents: widget.initialEvents,
         initialRawLogs: widget.initialRawLogs,
@@ -402,6 +417,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
           ? Directory.current.path
           : snapshot.workingDirectory,
       groupId: groupId,
+      instructions: snapshot.instructions,
+      permissionMode: snapshot.permissionMode,
     );
     await _sessionManager.reopenSnapshot(session.sessionId, snapshot);
   }
@@ -526,6 +543,10 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       if (confirmed != true) return;
     }
     _sessionManager.updateSessionPermissionMode(sessionId, mode);
+    if (mode != PermissionMode.bypass) {
+      _settings.permissionMode = mode;
+      _sessionManager.defaultPermissionMode = mode;
+    }
   }
 
   Future<void> _openSessionSettings(String sessionId) async {
@@ -582,7 +603,18 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
     ).showSnackBar(SnackBar(content: Text('변경 사항이 있어 worktree를 남겼습니다: $kept')));
   }
 
+  void _setSelectedDevice(TargetDeviceType device) {
+    _settings.device = device;
+    setState(() => _selectedDevice = device);
+  }
+
   void _onManagerChanged() {
+    // 다음 실행의 첫 세션이 마지막에 쓰던 백엔드와 폴더로 시작합니다.
+    final active = _sessionManager.activeSession;
+    if (active != null) {
+      _settings.backend = active.backendType;
+      _settings.workingDirectory = active.workingDirectory;
+    }
     if (mounted) {
       setState(() {});
     }
@@ -737,6 +769,8 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
             onEditGroup: (id) =>
                 _openGroupDialog(group: _sessionManager.groups?.groupById(id)),
             onDeleteGroup: _confirmDeleteGroup,
+            isGroupCollapsed: _settings.isGroupCollapsed,
+            onGroupCollapsedChanged: _settings.setGroupCollapsed,
             onNewChildSession: _openChildSessionDialog,
             onSessionSettings: _openSessionSettings,
             onDeleteSession: _confirmDeleteSession,
@@ -758,14 +792,13 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
               setState(() {});
             },
             selectedDevice: _selectedDevice,
-            onDeviceChanged: (device) {
-              setState(() {
-                _selectedDevice = device;
-              });
-            },
+            onDeviceChanged: _setSelectedDevice,
             autoOrchestrateByAntigravity:
                 _sessionManager.autoOrchestrateByAntigravity,
-            onAutoOrchestrateChanged: _sessionManager.setAutoOrchestration,
+            onAutoOrchestrateChanged: (enabled) {
+              _settings.autoOrchestrate = enabled;
+              _sessionManager.setAutoOrchestration(enabled);
+            },
           ),
         if (_showSessionSidebar) const VerticalDivider(width: 0.5),
         Expanded(
@@ -930,11 +963,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                   workingDirectory: workingDir,
                   workingDirectoryLocked: active?.groupId != null,
                   selectedDevice: _selectedDevice,
-                  onDeviceChanged: (device) {
-                    setState(() {
-                      _selectedDevice = device;
-                    });
-                  },
+                  onDeviceChanged: _setSelectedDevice,
                   isBusy: isBusy,
                   onBackendChanged: (b) {
                     if (active != null) {
@@ -1014,6 +1043,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 setState(() {
                   _showSessionSidebar = !_showSessionSidebar;
                 });
+                _settings.showSessionSidebar = _showSessionSidebar;
               },
             ),
             const SizedBox(width: 8),
@@ -1102,6 +1132,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 setState(() {
                   _showKvCachePanel = !_showKvCachePanel;
                 });
+                _settings.showKvCachePanel = _showKvCachePanel;
               },
             ),
             IconButton(
@@ -1114,6 +1145,7 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
                 setState(() {
                   _showRawLogs = !_showRawLogs;
                 });
+                _settings.showRawLogs = _showRawLogs;
               },
             ),
             const SizedBox(width: 10),

@@ -40,6 +40,8 @@ class MultiSessionSidebar extends StatelessWidget {
     this.onEditGroup,
     this.onDeleteGroup,
     this.onNewChildSession,
+    this.isGroupCollapsed,
+    this.onGroupCollapsedChanged,
   });
 
   final List<ManagedSession> sessions;
@@ -73,6 +75,8 @@ class MultiSessionSidebar extends StatelessWidget {
   final ValueChanged<String>? onEditGroup;
   final ValueChanged<String>? onDeleteGroup;
   final ValueChanged<String>? onNewChildSession;
+  final bool Function(String groupId)? isGroupCollapsed;
+  final void Function(String groupId, bool collapsed)? onGroupCollapsedChanged;
 
   /// 상위 세션 바로 아래에 하위 세션이 오도록 펼칩니다.
   static List<(ManagedSession, int)> _flattenTree(
@@ -182,6 +186,9 @@ class MultiSessionSidebar extends StatelessWidget {
                   for (final group in groups!)
                     _GroupTile(
                       group: group,
+                      initiallyExpanded: !(isGroupCollapsed?.call(group.id) ?? false),
+                      onExpansionChanged: (expanded) =>
+                          onGroupCollapsedChanged?.call(group.id, !expanded),
                       onNewSession: () => onNewSessionInGroup?.call(group.id),
                       onEdit: () => onEditGroup?.call(group.id),
                       onDelete: () => onDeleteGroup?.call(group.id),
@@ -310,6 +317,8 @@ class _GroupSectionHeader extends StatelessWidget {
 class _GroupTile extends StatelessWidget {
   const _GroupTile({
     required this.group,
+    required this.initiallyExpanded,
+    required this.onExpansionChanged,
     required this.onNewSession,
     required this.onEdit,
     required this.onDelete,
@@ -317,6 +326,8 @@ class _GroupTile extends StatelessWidget {
   });
 
   final WorkspaceGroup group;
+  final bool initiallyExpanded;
+  final ValueChanged<bool> onExpansionChanged;
   final VoidCallback onNewSession;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
@@ -360,7 +371,8 @@ class _GroupTile extends StatelessWidget {
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
           key: ValueKey('group_tile_${group.id}'),
-          initiallyExpanded: true,
+          initiallyExpanded: initiallyExpanded,
+          onExpansionChanged: onExpansionChanged,
           dense: true,
           visualDensity: VisualDensity.compact,
           controlAffinity: ListTileControlAffinity.leading,

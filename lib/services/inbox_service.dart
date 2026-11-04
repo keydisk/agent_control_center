@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/backend/agent_backend.dart';
 import '../core/models/agent_models.dart';
+import 'json_file.dart';
 import 'notification_service.dart';
 import 'permission_center.dart';
 
@@ -978,13 +979,10 @@ end tell
     final file = _stateFile;
     if (file == null) return;
     try {
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(
-        jsonEncode({
-          'imessageRowId': _lastIMessageRowId,
-          'mailIds': _seenMailIds?.toList(),
-        }),
-      );
+      writeJsonAtomically(file, {
+        'imessageRowId': _lastIMessageRowId,
+        'mailIds': _seenMailIds?.toList(),
+      });
     } on FileSystemException catch (_) {
       // 저장에 실패해도 이번 실행의 감지는 막지 않습니다.
     }
