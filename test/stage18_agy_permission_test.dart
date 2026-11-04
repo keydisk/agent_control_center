@@ -41,6 +41,7 @@ String _commandStep(
   String state, {
   String? command,
   String? error,
+  String? output,
 }) => jsonEncode({
   'event': 'step_update',
   'step_update': {
@@ -53,6 +54,7 @@ String _commandStep(
       'name': 'run_command',
       if (command != null) 'parameters': {'CommandLine': command},
       'error': ?error,
+      'output': ?output,
     },
   },
 });
@@ -199,9 +201,42 @@ void main() {
       );
     });
 
+    test('결과 없는 DONE도 최종 명령 거부가 있으면 승인을 요청한다', () {
+      const command = 'find lib test -type f | sort';
+      parser.parseLine(_commandStep(5, 'DONE', command: command));
+      final events = parser.parseLine(_result(denied: [_deniedAction]));
+      final request = events.whereType<ApprovalRequestEvent>().single.request;
+      expect(request.id, 'agy_denied_5');
+      expect(request.arguments['CommandLine'], command);
+      expect(parser.deniedRules[request.id], 'command($command)');
+      expect(events.whereType<MessageEvent>(), isEmpty);
+      expect(
+        parser
+            .parseLine(_result(denied: [_deniedAction]))
+            .whereType<ApprovalRequestEvent>(),
+        isEmpty,
+      );
+    });
+
+    test('결과 없는 DONE도 최종 거부가 없으면 재실행하지 않는다', () {
+      parser.parseLine(_commandStep(5, 'DONE', command: 'find lib'));
+      expect(
+        parser.parseLine(_result()).whereType<ApprovalRequestEvent>(),
+        isEmpty,
+      );
+      expect(
+        parser
+            .parseLine(_result(denied: [_deniedAction]))
+            .whereType<ApprovalRequestEvent>(),
+        isEmpty,
+      );
+    });
+
     test('완료된 명령과 일반 실행 오류는 재실행 승인 대상에서 제외한다', () {
       parser.parseLine(_commandStep(2, 'ACTIVE', command: 'mkdir example'));
-      parser.parseLine(_commandStep(2, 'DONE'));
+      parser.parseLine(
+        _commandStep(2, 'DONE', output: 'Command exited with code 0.'),
+      );
       parser.parseLine(_commandStep(3, 'ACTIVE', command: 'false'));
       parser.parseLine(_commandStep(3, 'ERROR', error: 'exit status 1'));
       parser.parseLine(_commandStep(4, 'ACTIVE', command: 'find lib'));
@@ -354,6 +389,31 @@ void main() {
         contains('command(find lib)'),
       );
       expect(spawner.processes.last.written.single, contains('find lib'));
+      expect(args, isNot(contains('--dangerously-skip-permissions')));
+    });
+
+    test('결과 없는 DONE 거부도 승인 후 정확한 명령만 허용해 재개한다', () async {
+      const command = 'find lib test -type f | sort';
+      emit(_commandStep(5, 'DONE', command: command));
+      emit(_result(denied: [_deniedAction]));
+      await _settle();
+      expect(events.whereType<DoneEvent>(), isEmpty);
+      expect(
+        events.whereType<ApprovalRequestEvent>().single.request.id,
+        'agy_denied_5',
+      );
+      await adapter.respondToApproval(
+        _decision('agy_denied_5', approved: true),
+      );
+      await _settle();
+      expect(spawner.processes, hasLength(2));
+      final args = spawner.arguments.last;
+      expect(args[args.indexOf('--conversation') + 1], _conversation);
+      expect(jsonDecode(args[args.indexOf('--settings') + 1]), {
+        'permissions': {
+          'allow': ['command($command)'],
+        },
+      });
       expect(args, isNot(contains('--dangerously-skip-permissions')));
     });
 

@@ -143,12 +143,13 @@ class AntigravityEventParser {
 
       final commandId = '$deniedRequestPrefix$stepIdx';
       if (toolName == 'run_command') {
-        // 승인 단계에서 취소되면 오류/인자가 생략될 수 있어 ACTIVE의 명령을 보관합니다.
+        // 자동 거부도 결과 없는 DONE으로 오므로 최종 거부 결과까지 명령을 보관합니다.
         if (toolArgs['CommandLine'] is! String &&
             _unfinishedCommands.containsKey(commandId)) {
           toolArgs = _unfinishedCommands[commandId]!;
         }
-        if (state == 'DONE' || (state == 'ERROR' && toolError.isNotEmpty)) {
+        if ((state == 'DONE' && toolOutput.isNotEmpty) ||
+            toolError.isNotEmpty) {
           _unfinishedCommands.remove(commandId);
         } else if (toolArgs['CommandLine'] is String) {
           _unfinishedCommands[commandId] = Map.of(toolArgs);
