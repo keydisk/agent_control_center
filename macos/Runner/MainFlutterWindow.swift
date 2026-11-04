@@ -45,6 +45,46 @@ class MainFlutterWindow: NSWindow {
       }
     }
 
+    let pasteboardChannel = FlutterMethodChannel(
+      name: "agent_control_center/pasteboard",
+      binaryMessenger: flutterViewController.engine.binaryMessenger
+    )
+    pasteboardChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "readMediaPaths":
+        result(MainFlutterWindow.pastedMediaPaths())
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
     super.awakeFromNib()
+  }
+
+  /// 클립보드의 파일 경로를 돌려줍니다. 이미지 데이터만 있으면 임시 PNG로 저장합니다.
+  private static func pastedMediaPaths() -> [String] {
+    let pasteboard = NSPasteboard.general
+    let fileURLs = pasteboard.readObjects(
+      forClasses: [NSURL.self],
+      options: [.urlReadingFileURLsOnly: true]
+    ) as? [URL] ?? []
+    if !fileURLs.isEmpty { return fileURLs.map(\.path) }
+
+    // 표 복사처럼 텍스트를 우선하는 내용은 이미지로 가로채지 않습니다.
+    let candidates: [NSPasteboard.PasteboardType] = [.png, .tiff, .string]
+    guard
+      let preferred = pasteboard.types?.first(where: candidates.contains),
+      preferred != .string,
+      let data = pasteboard.data(forType: preferred),
+      // PNG를 다시 인코딩하면 잘못된 gAMA가 기록되어 색이 바래므로 그대로 저장합니다.
+      let png = preferred == .png
+        ? data
+        : NSBitmapImageRep(data: data)?.representation(using: .png, properties: [:])
+    else { return [] }
+
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("pasted-\(UUID().uuidString).png")
+    guard (try? png.write(to: url)) != nil else { return [] }
+    return [url.path]
   }
 }

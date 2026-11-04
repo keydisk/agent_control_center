@@ -94,6 +94,11 @@ class CodexAdapter implements AgentBackend {
       buffer.writeln(cfg.systemPromptAppend);
     }
     buffer.write(prompt);
+    final files = attachments.where((path) => !isImageAttachment(path));
+    if (files.isNotEmpty) {
+      buffer.writeln('\n\n[첨부 파일 경로]');
+      files.forEach(buffer.writeln);
+    }
 
     _eventsController.add(
       MessageEvent(
@@ -149,12 +154,13 @@ class CodexAdapter implements AgentBackend {
         },
       for (final dir in cfg.trustedDirectories)
         if (dir != cfg.workingDirectory) ...['--add-dir', dir],
-      for (final img in attachments) ...['-i', img],
       ...cfg.extraArgs,
       if (_activeThreadId != null && _activeThreadId!.isNotEmpty) ...[
         'resume',
         _activeThreadId!,
       ],
+      // `-i <값>`은 여러 값을 받아 프롬프트까지 삼키므로 `=` 형식으로 넘깁니다.
+      for (final img in attachments.where(isImageAttachment)) '--image=$img',
       buffer.toString(),
     ];
 
