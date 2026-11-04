@@ -86,6 +86,7 @@ class PermissionCenter extends ChangeNotifier {
     final dir = Directory('$home/.agent_control_center')
       ..createSync(recursive: true);
     return PermissionCenter(
+      credentialVault: SecureCredentialVault(useOsKeychain: true),
       database: AppDriftDatabase(
         NativeDatabase(File('${dir.path}/acc_database.sqlite')),
       ),
@@ -213,6 +214,11 @@ class PermissionCenter extends ChangeNotifier {
           _osPermissions[type] = ApprovalScope.always;
         }
       }
+      for (final account in _accountScopes) {
+        if (saved.contains(account.id)) {
+          account.grantedScope = ApprovalScope.always;
+        }
+      }
     } on Exception catch (_) {
       // 손상된 파일은 권한 없음으로 취급하고 다시 묻습니다.
     } on TypeError catch (_) {
@@ -228,6 +234,8 @@ class PermissionCenter extends ChangeNotifier {
       writeJsonAtomically(file, [
         for (final e in _osPermissions.entries)
           if (e.value == ApprovalScope.always) e.key.id,
+        for (final account in _accountScopes)
+          if (account.grantedScope == ApprovalScope.always) account.id,
       ]);
     } on FileSystemException catch (_) {
       // 저장에 실패해도 이번 실행의 권한 변경은 막지 않습니다.
@@ -263,6 +271,7 @@ class PermissionCenter extends ChangeNotifier {
     final item = _accountScopes.where((a) => a.id == scopeId).firstOrNull;
     if (item == null) return;
     item.grantedScope = scope;
+    _saveOsPermissions();
     if (scope == ApprovalScope.denied) {
       await credentialVault.deleteBackendSecret(
         backend: item.backend,

@@ -6,6 +6,7 @@ import 'package:agent_control_center/core/models/agent_models.dart';
 import 'package:agent_control_center/services/inbox_service.dart';
 import 'package:agent_control_center/services/notification_service.dart';
 import 'package:agent_control_center/services/permission_center.dart';
+import 'package:agent_control_center/services/storage_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 class _Spawner implements ProcessSpawner {
@@ -73,12 +74,22 @@ String _attributedHex(String text) {
       : [0x81, body.length & 0xFF, body.length >> 8];
   final bytes = [
     ...ascii.encode('streamtyped'),
-    0x84, 0x01, 0x40, 0x84, 0x84, 0x84,
+    0x84,
+    0x01,
+    0x40,
+    0x84,
+    0x84,
+    0x84,
     ...ascii.encode('NSString'),
-    0x01, 0x94, 0x84, 0x01, 0x2B,
+    0x01,
+    0x94,
+    0x84,
+    0x01,
+    0x2B,
     ...length,
     ...body,
-    0x86, 0x84,
+    0x86,
+    0x84,
   ];
   return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
@@ -145,7 +156,10 @@ void main() {
         ..mailRunning = true
         ..unreadMail = '10';
       expect(await inbox.fetchFromMacOsMailApp(), isEmpty, reason: '기준 조회');
-      expect(spawner.calls.every((c) => !c.last.contains('whose id is')), isTrue);
+      expect(
+        spawner.calls.every((c) => !c.last.contains('whose id is')),
+        isTrue,
+      );
     });
 
     test('읽은 메일은 기록에서 빠져 파일이 커지지 않는다', () async {
@@ -333,6 +347,64 @@ void main() {
         loaded.osPermissions.values.every((s) => s == ApprovalScope.denied),
         isTrue,
       );
+    });
+  });
+
+  group('확인하지 못한 이유 표시', () {
+    test('꺼진 소스는 조용히 건너뛰지 않고 이유를 남기며 허용하면 사라진다', () async {
+      final perms = PermissionCenter();
+      final inbox = InboxService(
+        notificationService: NotificationService(enableOsPlugin: false),
+        spawner: spawner,
+        permissionCenter: perms,
+        customIMessageDbPath: '/tmp/chat.db',
+      );
+      addTearDown(inbox.dispose);
+
+      await inbox.pollAllAuthorizedSourcesOnce();
+      expect(
+        inbox.sourceErrors.keys,
+        containsAll(InboxSourceType.values.where((s) => s.isSupported)),
+      );
+      expect(spawner.calls, isEmpty);
+
+      perms.setOsPermissionScope(
+        OsPermissionType.fullDiskAccess,
+        ApprovalScope.session,
+      );
+      await inbox.pollAllAuthorizedSourcesOnce();
+      expect(inbox.sourceErrors, isNot(contains(InboxSourceType.imessage)));
+    });
+
+    test('Mail이 꺼져 있으면 이유를 남긴다', () async {
+      spawner.mailRunning = false;
+      final inbox = service();
+      await inbox.fetchFromMacOsMailApp();
+      expect(inbox.sourceErrors[InboxSourceType.macosMail], contains('꺼져'));
+    });
+
+    test('계정 허용이 재시작 후에도 유지되고 철회하면 사라진다', () async {
+      final file = File('${temp.path}/perms.json');
+      final vault = SecureCredentialVault();
+      final perms = PermissionCenter(
+        osPermissionFile: file,
+        credentialVault: vault,
+      );
+      await perms.setAccountScopePermission(
+        scopeId: 'telegram_bot',
+        scope: ApprovalScope.always,
+      );
+      ApprovalScope reloaded() => PermissionCenter(
+        osPermissionFile: file,
+        credentialVault: vault,
+      ).accountScopes.firstWhere((a) => a.id == 'telegram_bot').grantedScope;
+      expect(reloaded(), ApprovalScope.always);
+
+      await perms.setAccountScopePermission(
+        scopeId: 'telegram_bot',
+        scope: ApprovalScope.denied,
+      );
+      expect(reloaded(), ApprovalScope.denied);
     });
   });
 }
