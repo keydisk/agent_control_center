@@ -354,88 +354,110 @@ class InboxService extends ChangeNotifier {
     final newlySummarized = <InboxSummaryItem>[];
     final perms = permissionCenter;
 
-    // 1. Gmail (권한 허용 + 키체인에 OAuth 토큰 존재 시)
     if (perms != null) {
-      final gmailScope = perms.accountScopes
-          .where((a) => a.id == 'google_gmail_readonly')
-          .firstOrNull;
-      if (gmailScope != null &&
-          gmailScope.grantedScope != ApprovalScope.denied) {
-        final token = await perms.credentialVault.readBackendSecret(
-          backend: gmailScope.backend,
-          credentialName: gmailScope.id,
-        );
-        if (token != null && token.isNotEmpty) {
-          try {
-            final items = await fetchFromGmailApi(oauthAccessToken: token);
-            newlySummarized.addAll(items);
-          } catch (_) {}
-        }
-      }
-
-      // 2. Slack (권한 허용 + 키체인에 Bot/User 토큰 존재 시)
-      final slackScope = perms.accountScopes
-          .where((a) => a.id == 'slack_readonly')
-          .firstOrNull;
-      if (slackScope != null &&
-          slackScope.grantedScope != ApprovalScope.denied) {
-        final token = await perms.credentialVault.readBackendSecret(
-          backend: slackScope.backend,
-          credentialName: slackScope.id,
-        );
-        if (token != null && token.isNotEmpty) {
-          try {
-            final items = await fetchFromSlackApi(
+      newlySummarized
+        ..addAll(
+          await _scanAccount(
+            perms,
+            InboxSourceType.gmail,
+            'google_gmail_readonly',
+            (token) => fetchFromGmailApi(oauthAccessToken: token),
+          ),
+        )
+        ..addAll(
+          await _scanAccount(
+            perms,
+            InboxSourceType.slack,
+            'slack_readonly',
+            (token) => fetchFromSlackApi(
               slackBotToken: token,
               channelId: defaultSlackChannelId,
-            );
-            newlySummarized.addAll(items);
-          } catch (_) {}
-        }
-      }
-
-      // 3. macOS Mail.app (자동화 Apple Events 권한 허용 시)
-      final mailPerm =
-          perms.osPermissions[OsPermissionType.automationAppleEvents];
-      if (mailPerm != null && mailPerm != ApprovalScope.denied) {
-        try {
-          final items = await fetchFromMacOsMailApp();
-          newlySummarized.addAll(items);
-        } catch (_) {}
-      }
-
-      // 4. macOS iMessage (Full Disk Access 권한 허용 시)
-      final fdaPerm = perms.osPermissions[OsPermissionType.fullDiskAccess];
-      if (fdaPerm != null && fdaPerm != ApprovalScope.denied) {
-        try {
-          final items = await fetchFromMacOsIMessage(
-            customDbPath: customIMessageDbPath,
-          );
-          newlySummarized.addAll(items);
-        } catch (_) {}
-      }
-
-      // 5. Telegram (권한 허용 + 키체인에 봇 토큰 존재 시)
-      final telegramScope = perms.accountScopes
-          .where((a) => a.id == 'telegram_bot')
-          .firstOrNull;
-      if (telegramScope != null &&
-          telegramScope.grantedScope != ApprovalScope.denied) {
-        final token = await perms.credentialVault.readBackendSecret(
-          backend: telegramScope.backend,
-          credentialName: telegramScope.id,
+            ),
+          ),
+        )
+        ..addAll(
+          await _scanLocal(
+            perms,
+            InboxSourceType.macosMail,
+            OsPermissionType.automationAppleEvents,
+            fetchFromMacOsMailApp,
+          ),
+        )
+        ..addAll(
+          await _scanLocal(
+            perms,
+            InboxSourceType.imessage,
+            OsPermissionType.fullDiskAccess,
+            () => fetchFromMacOsIMessage(customDbPath: customIMessageDbPath),
+          ),
+        )
+        ..addAll(
+          await _scanAccount(
+            perms,
+            InboxSourceType.telegram,
+            'telegram_bot',
+            (token) => fetchFromTelegramBotApi(botToken: token),
+          ),
         );
-        if (token != null && token.isNotEmpty) {
-          try {
-            final items = await fetchFromTelegramBotApi(botToken: token);
-            newlySummarized.addAll(items);
-          } catch (_) {}
-        }
-      }
     }
 
     notifyListeners();
     return newlySummarized;
+  }
+
+  /// 토큰이 든 URL이 화면에 나오지 않도록 직접 만든 오류 문구만 그대로 보여 줍니다.
+  void _recordScanFailure(InboxSourceType source, Object error) {
+    _sourceErrors[source] = error is StateError
+        ? error.message
+        : '조회 실패 (네트워크 또는 응답 오류)';
+  }
+
+  Future<List<InboxSummaryItem>> _scanAccount(
+    PermissionCenter perms,
+    InboxSourceType source,
+    String scopeId,
+    Future<List<InboxSummaryItem>> Function(String token) fetch,
+  ) async {
+    final scope = perms.accountScopes.where((a) => a.id == scopeId).firstOrNull;
+    if (scope == null || scope.grantedScope == ApprovalScope.denied) {
+      _sourceErrors[source] = '꺼져 있음 — 권한 센터의 계정 항목에서 허용하고 토큰을 입력해 주세요.';
+      return const [];
+    }
+    final token = await perms.credentialVault.readBackendSecret(
+      backend: scope.backend,
+      credentialName: scope.id,
+    );
+    if (token == null || token.isEmpty) {
+      _sourceErrors[source] = '토큰 없음 — 권한 센터의 계정 항목에서 토큰을 입력해 주세요.';
+      return const [];
+    }
+    try {
+      final items = await fetch(token);
+      _sourceErrors.remove(source);
+      return items;
+    } catch (e) {
+      _recordScanFailure(source, e);
+      return const [];
+    }
+  }
+
+  Future<List<InboxSummaryItem>> _scanLocal(
+    PermissionCenter perms,
+    InboxSourceType source,
+    OsPermissionType permission,
+    Future<List<InboxSummaryItem>> Function() fetch,
+  ) async {
+    final granted = perms.osPermissions[permission];
+    if (granted == null || granted == ApprovalScope.denied) {
+      _sourceErrors[source] = '꺼져 있음 — 권한 센터에서 "${permission.label}"을 허용해 주세요.';
+      return const [];
+    }
+    try {
+      return await fetch();
+    } catch (e) {
+      _recordScanFailure(source, e);
+      return const [];
+    }
   }
 
   /// 외부 모델로 원문을 보내기 전에 사용자가 설정한 전송 범위 정책을 적용합니다.
@@ -781,7 +803,12 @@ end tell
       hint,
     );
     final output = res?.stdout.toString().trim();
-    if (output == null || output == _mailNotRunning) return const [];
+    if (output == _mailNotRunning) {
+      _sourceErrors[InboxSourceType.macosMail] =
+          'Mail 앱이 꺼져 있어 확인하지 못했습니다. Mail을 켜 두면 다음 스캔부터 확인합니다.';
+      return const [];
+    }
+    if (output == null) return const [];
     final ids =
         output.split(',').map((i) => int.tryParse(i.trim())).nonNulls.toList()
           ..sort();

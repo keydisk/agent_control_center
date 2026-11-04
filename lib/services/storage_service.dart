@@ -170,7 +170,11 @@ class SecureCredentialVault {
   SecureCredentialVault({
     FlutterSecureStorage? secureStorage,
     this.useOsKeychain = false,
-  }) : _secureStorage = secureStorage ?? const FlutterSecureStorage();
+  }) : _secureStorage = secureStorage ??
+           const FlutterSecureStorage(
+             // ad-hoc 서명 앱은 data protection 키체인 접근 그룹을 쓸 수 없습니다.
+             mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+           );
 
   final FlutterSecureStorage _secureStorage;
   final bool useOsKeychain;
