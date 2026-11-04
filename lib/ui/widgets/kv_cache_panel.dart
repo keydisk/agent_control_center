@@ -281,7 +281,7 @@ class KvCachePanel extends StatelessWidget {
                 '사용량 정보 없음',
                 '0%',
                 fraction: 0,
-                color: mac.green,
+                color: mac.usageLevelColor(0),
                 barKey: ValueKey('provider_empty_bar_${backend.id}'),
               ),
             const SizedBox(height: 8),
