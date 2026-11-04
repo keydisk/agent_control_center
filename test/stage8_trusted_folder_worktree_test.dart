@@ -172,7 +172,7 @@ void main() {
       expect(session.worktreeLinks, isEmpty);
     });
 
-    test('브랜치 worktree에서 실행하고 병합 후 정리하며 다음 요청은 새 worktree를 쓴다', () async {
+    test('브랜치 worktree에서 실행하고 병합 후 정리하며 세션을 닫는다', () async {
       final repo = await _createRepo();
       final backend = _FakeBackend();
       final manager = _manager();
@@ -214,19 +214,7 @@ void main() {
       expect(session.isolatedWorktreePath, isNull);
       expect(await _git(repo.path, ['branch', '--list', 'acc/*']), isEmpty);
 
-      await manager.sendPrompt(session.sessionId, '후속 작업');
-      addTearDown(() async {
-        final next = session.activeWorktreeLink!;
-        await _git(repo.path, ['worktree', 'remove', next.worktreeRoot]);
-        await Directory(next.worktreeRoot).parent.delete();
-      });
-      expect(session.worktreeLinks, hasLength(2));
-      expect(session.worktreeLinks.first.isMerged, isTrue);
-      expect(session.activeWorktreeLink, isNotNull);
-      expect(
-        File('${backend.lastConfig!.workingDirectory}/feature.txt').existsSync(),
-        isTrue,
-      );
+      expect(manager.sessions, isEmpty);
     });
 
     test('충돌하면 병합을 되돌리고 연결을 활성 상태로 유지한다', () async {
@@ -325,6 +313,82 @@ void main() {
         session.worktreeLinks.last.mergeCommit,
         await _git(repo.path, ['rev-parse', '--short', 'develop']),
       );
+      for (var i = 0; i < 100 && manager.sessions.isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(manager.sessions, isEmpty);
+      expect(manager.searchSavedSessions(), hasLength(1));
+    });
+
+    test('에이전트가 worktree를 먼저 지우고 병합했어도 세션을 닫는다', () async {
+      final repo = await _createRepo();
+      final backend = _FakeBackend();
+      final manager = _manager();
+      final session = manager.createSession(
+        backendOverride: backend,
+        workingDirectory: repo.path,
+        parentSessionId: 'root',
+      );
+      await manager.sendPrompt(session.sessionId, '요청');
+      final link = session.activeWorktreeLink!;
+      await File('${link.worktreeRoot}/agent.txt').writeAsString('agent\n');
+      await _git(link.worktreeRoot, ['add', '.']);
+      await _git(link.worktreeRoot, ['commit', '-m', '에이전트 커밋']);
+      await _git(repo.path, ['merge', '--no-ff', '-m', '병합', link.branch]);
+      await _git(repo.path, ['worktree', 'remove', link.worktreeRoot]);
+
+      backend.eventCtrl.add(
+        DoneEvent(
+          id: 'd1',
+          sessionId: session.sessionId,
+          backend: BackendType.codex,
+          model: 'm',
+          timestamp: DateTime.now(),
+        ),
+      );
+      for (var i = 0; i < 100 && manager.sessions.isNotEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      expect(manager.sessions, isEmpty);
+    });
+
+    test('병합 후 미커밋 파일로 worktree가 남으면 세션을 닫지 않는다', () async {
+      final repo = await _createRepo();
+      final backend = _FakeBackend();
+      final manager = _manager();
+      final session = manager.createSession(
+        backendOverride: backend,
+        workingDirectory: repo.path,
+        parentSessionId: 'root',
+      );
+      await manager.sendPrompt(session.sessionId, '요청');
+      final link = session.activeWorktreeLink!;
+      addTearDown(() async {
+        await _git(repo.path, ['worktree', 'remove', '--force', link.worktreeRoot]);
+        await Directory(link.worktreeRoot).parent.delete();
+      });
+      await File('${link.worktreeRoot}/agent.txt').writeAsString('agent\n');
+      await _git(link.worktreeRoot, ['add', '.']);
+      await _git(link.worktreeRoot, ['commit', '-m', '에이전트 커밋']);
+      await _git(repo.path, ['merge', '--no-ff', '-m', '병합', link.branch]);
+      await File('${link.worktreeRoot}/left.txt').writeAsString('left\n');
+
+      backend.eventCtrl.add(
+        DoneEvent(
+          id: 'd1',
+          sessionId: session.sessionId,
+          backend: BackendType.codex,
+          model: 'm',
+          timestamp: DateTime.now(),
+        ),
+      );
+      for (var i = 0; i < 100 && !session.worktreeLinks.last.isMerged; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      expect(session.worktreeLinks.last.isMerged, isTrue);
+      expect(manager.sessions, contains(session));
+      expect(File('${link.worktreeRoot}/left.txt').existsSync(), isTrue);
     });
   });
 

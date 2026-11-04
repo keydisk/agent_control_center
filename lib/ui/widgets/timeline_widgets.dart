@@ -38,7 +38,8 @@ class ChildWorktreeNotice extends StatelessWidget {
   });
 
   final ChildWorktreeEvent event;
-  final VoidCallback onOpen;
+  /// 하위 세션이 닫혔으면 null입니다.
+  final VoidCallback? onOpen;
   final VoidCallback onMerge;
 
   @override
@@ -85,11 +86,12 @@ class ChildWorktreeNotice extends StatelessWidget {
                   ),
                 ),
               ),
-              TextButton(
-                key: ValueKey('open_child_${event.childSessionId}'),
-                onPressed: onOpen,
-                child: const Text('열기'),
-              ),
+              if (onOpen != null)
+                TextButton(
+                  key: ValueKey('open_child_${event.childSessionId}'),
+                  onPressed: onOpen,
+                  child: const Text('열기'),
+                ),
               if (event.canMerge)
                 FilledButton.tonal(
                   key: ValueKey('merge_child_${event.childSessionId}'),

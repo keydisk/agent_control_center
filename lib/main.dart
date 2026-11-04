@@ -1226,7 +1226,12 @@ class _ControlCenterHomeScreenState extends State<ControlCenterHomeScreen> {
       case ChildWorktreeEvent():
         return ChildWorktreeNotice(
           event: event,
-          onOpen: () => _sessionManager.selectSession(event.childSessionId),
+          // 닫힌 하위 세션의 id는 새 세션이 다시 쓸 수 있어 부모까지 확인합니다.
+          onOpen:
+              _sessionById(event.childSessionId)?.parentSessionId ==
+                  event.sessionId
+              ? () => _sessionManager.selectSession(event.childSessionId)
+              : null,
           onMerge: () => _mergeWorktree(event.childSessionId),
         );
       case ErrorEvent():

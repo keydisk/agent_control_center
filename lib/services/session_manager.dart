@@ -510,6 +510,13 @@ class SessionManager extends ChangeNotifier {
     final live = {for (final s in _sessions.values) s.snapshotId};
     for (final snapshot in _historyStore.orderedSessions()) {
       if (live.contains(snapshot.id)) continue;
+      final worktree = snapshot.worktreePath;
+      final worktreeGone = worktree != null && !Directory(worktree).existsSync();
+      // 병합을 마친 세션은 닫힌 작업이므로 기록(/load)에만 남깁니다.
+      if ((worktree == null || worktreeGone) &&
+          snapshot.worktreeLinks.lastOrNull?.isMerged == true) {
+        continue;
+      }
       // 하위 세션 관계와 하위 작업 알림이 이어지도록 예전 세션 id를 그대로 씁니다.
       final previousId = snapshot.id.split('@').first;
       final sessionId = _sessions.containsKey(previousId)
@@ -531,8 +538,6 @@ class SessionManager extends ChangeNotifier {
         permissionMode: snapshot.permissionMode,
         makeActive: false,
       );
-      final worktree = snapshot.worktreePath;
-      final worktreeGone = worktree != null && !Directory(worktree).existsSync();
       session
         ..isolatedWorktreePath = worktreeGone ? null : worktree
         // 대화는 폴더에 묶여 있어 worktree가 사라지면 이어갈 수 없습니다.
@@ -720,11 +725,12 @@ class SessionManager extends ChangeNotifier {
     );
   }
 
-  /// 턴이 끝나면 병합 여부를 확인한 뒤 스냅샷을 남기고 상위 세션에 알립니다.
+  /// 턴이 끝나면 병합 여부를 확인한 뒤 스냅샷을 남기고 상위 세션에 알린 다음, 병합됐으면 닫습니다.
   Future<void> _finishTurn(ManagedSession session) async {
     await _detectMergeByAgent(session);
     _recordSnapshot(session);
     await _reportToParent(session);
+    await _closeIfMerged(session);
   }
 
   Future<void> _reportToParent(
@@ -1116,6 +1122,7 @@ class SessionManager extends ChangeNotifier {
       }
       await _completeMerge(session, link);
       await _reportToParent(session, notify: false);
+      await _closeIfMerged(session);
     } finally {
       _mergingSessionIds.remove(sessionId);
     }
@@ -1163,7 +1170,10 @@ class SessionManager extends ChangeNotifier {
       'remove',
       link.worktreeRoot,
     ]);
-    if (removed.exitCode != 0) return false;
+    // 에이전트가 먼저 지웠으면 git은 거절하지만 지킬 작업이 남아 있지 않습니다.
+    if (removed.exitCode != 0 && Directory(link.worktreeRoot).existsSync()) {
+      return false;
+    }
     await _runGit(baseDir, ['branch', '-d', link.branch]);
     final parent = Directory(p.dirname(link.worktreeRoot));
     if (p.basename(parent.path).startsWith('acc_worktree_')) {
@@ -1172,21 +1182,40 @@ class SessionManager extends ChangeNotifier {
     return true;
   }
 
-  /// 세션을 중지·제거합니다. 변경이 남은 worktree는 지우지 않고 그 경로를 돌려줍니다.
-  Future<String?> deleteSession(String sessionId) async {
-    final session = _sessions.remove(sessionId);
-    if (session == null) return null;
-    if (_activeSessionId == sessionId) {
-      _activeSessionId = _sessions.keys.lastOrNull;
+  /// 병합을 마친 세션을 사이드바에서 닫습니다. 대화 기록과 상위 세션의 결과 알림은 남깁니다.
+  /// 미커밋 파일로 worktree가 남았거나 후속 요청이 시작됐으면 닫지 않습니다.
+  Future<void> _closeIfMerged(ManagedSession session) async {
+    if (_sessions[session.sessionId] != session ||
+        session.isolatedWorktreePath != null ||
+        session.worktreeLinks.lastOrNull?.isMerged != true ||
+        session.status == SessionStatus.running ||
+        session.status == SessionStatus.awaitingApproval) {
+      return;
     }
-    _historyStore.removeSnapshot(session.snapshotId);
+    await _detachSession(session, keepRecords: true);
+  }
+
+  Future<void> _detachSession(
+    ManagedSession session, {
+    required bool keepRecords,
+  }) async {
+    final sessionId = session.sessionId;
+    _sessions.remove(sessionId);
+    if (_activeSessionId == sessionId) {
+      _activeSessionId = _sessions.containsKey(session.parentSessionId)
+          ? session.parentSessionId
+          : _sessions.keys.lastOrNull;
+    }
+    if (!keepRecords) _historyStore.removeSnapshot(session.snapshotId);
     for (final other in _sessions.values) {
       final orphaned = other.parentSessionId == sessionId;
       if (orphaned) other.parentSessionId = session.parentSessionId;
       final eventCount = other.events.length;
-      other.events.removeWhere(
-        (e) => e is ChildWorktreeEvent && e.childSessionId == sessionId,
-      );
+      if (!keepRecords) {
+        other.events.removeWhere(
+          (e) => e is ChildWorktreeEvent && e.childSessionId == sessionId,
+        );
+      }
       // 다음 실행에 지운 하위 작업의 알림이 되살아나지 않게 합니다.
       if (orphaned || other.events.length != eventCount) _recordSnapshot(other);
     }
@@ -1195,6 +1224,13 @@ class SessionManager extends ChangeNotifier {
     await session.eventSub?.cancel();
     await session.logSub?.cancel();
     await session.backend.dispose();
+  }
+
+  /// 세션을 중지·제거합니다. 변경이 남은 worktree는 지우지 않고 그 경로를 돌려줍니다.
+  Future<String?> deleteSession(String sessionId) async {
+    final session = _sessions[sessionId];
+    if (session == null) return null;
+    await _detachSession(session, keepRecords: false);
 
     final link = session.activeWorktreeLink;
     if (link == null) return null;
